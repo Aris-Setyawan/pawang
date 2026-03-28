@@ -1,0 +1,20 @@
+{
+  "timestamp": 1774588992,
+  "time_wib": "2026-03-27 12:23 WIB",
+  "deepseek_balance": "2.05",
+  "openrouter_usage": "0.43026797",
+  "history": [
+    {
+      "timestamp": 1774588748,
+      "time_wib": "2026-03-27 12:19 WIB",
+      "deepseek_balance": "2.05",
+      "openrouter_usage": "0.35423597"
+    },
+    {
+      "timestamp": 1774588992,
+      "time_wib": "2026-03-27 12:23 WIB",
+      "deepseek_balance": "2.05",
+      "openrouter_usage": "0.43026797"
+    }
+  ]
+}

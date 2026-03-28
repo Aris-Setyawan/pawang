@@ -1,0 +1,159 @@
+# Pawang — Multi-Agent Gateway Configuration
+# Satu file YAML, bukan 6,798-line JSON :)
+
+gateway:
+  host: 0.0.0.0
+  port: 18800
+  log_level: info
+
+providers:
+  anthropic:
+    base_url: https://openrouter.ai/api/v1
+    api_key: ${OPENROUTER_API_KEY}
+    api_format: openai
+    models:
+      - anthropic/claude-opus-4-6
+      - anthropic/claude-sonnet-4-6
+      - anthropic/claude-haiku-4-5
+
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key: ${DEEPSEEK_API_KEY}
+    api_format: openai
+    models:
+      - deepseek-chat
+      - deepseek-reasoner
+
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+    api_format: openai
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+      - o3
+      - o4-mini
+      - codex-mini-latest
+
+  google:
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    api_key: ${GEMINI_API_KEY}
+    api_format: gemini
+    models:
+      - gemini-2.5-pro
+      - gemini-2.5-flash
+      - gemini-2.0-flash
+
+  modelstudio:
+    base_url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    api_key: ${MODELSTUDIO_API_KEY}
+    api_format: openai
+    models:
+      - qwen-max
+      - qwen-plus
+      - qwen-turbo
+      - qwen-long
+      - qwen2.5-72b-instruct
+      - qwen2.5-coder-32b-instruct
+
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    api_key: ${OPENROUTER_API_KEY}
+    api_format: openai
+    models: []  # dynamic, fetched from API
+
+agents:
+  - id: agent1
+    name: Santa
+    model: anthropic/claude-sonnet-4-6
+    provider: anthropic
+    system_prompt_file: prompts/agent1.md
+    channels: [telegram]
+    max_context_tokens: 100000
+    temperature: 0.7
+
+  - id: agent2
+    name: Creative
+    model: deepseek-chat
+    provider: deepseek
+    system_prompt_file: prompts/agent2.md
+    channels: []
+    max_context_tokens: 64000
+    temperature: 0.9
+
+  - id: agent3
+    name: Analyst
+    model: deepseek-reasoner
+    provider: deepseek
+    system_prompt_file: prompts/agent3.md
+    channels: []
+    max_context_tokens: 64000
+    temperature: 0.3
+
+  - id: agent4
+    name: Coder
+    model: anthropic/claude-opus-4-6
+    provider: anthropic
+    system_prompt_file: prompts/agent4.md
+    channels: []
+    max_context_tokens: 200000
+    temperature: 0.5
+
+  # Backup / Failover agents
+  - id: agent5
+    name: Backup Orchestrator
+    model: deepseek-chat
+    provider: deepseek
+    system_prompt_file: prompts/agent5.md
+    channels: []
+    max_context_tokens: 64000
+    temperature: 0.7
+
+  - id: agent6
+    name: Backup Creative
+    model: qwen-plus
+    provider: modelstudio
+    system_prompt_file: prompts/agent6.md
+    channels: []
+    max_context_tokens: 64000
+    temperature: 0.9
+
+  - id: agent7
+    name: Backup Analyst
+    model: qwen-max
+    provider: modelstudio
+    system_prompt_file: prompts/agent7.md
+    channels: []
+    max_context_tokens: 64000
+    temperature: 0.3
+
+  - id: agent8
+    name: Backup Coder
+    model: deepseek-chat
+    provider: deepseek
+    system_prompt_file: prompts/agent8.md
+    channels: []
+    max_context_tokens: 64000
+    temperature: 0.5
+
+channels:
+  telegram:
+    token: ${TELEGRAM_BOT_TOKEN}
+    allowed_users: []  # empty = semua boleh
+    default_agent: agent1
+
+health:
+  check_interval: 60
+  auto_failover: true
+  fallback_chain:
+    - [agent1, agent5]  # agent1 down -> agent5
+    - [agent2, agent6]
+    - [agent3, agent7]
+    - [agent4, agent8]
+
+panel:
+  enabled: true
+  port: 18801
+  auth:
+    username: admin
+    password: ${PANEL_PASSWORD}
