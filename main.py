@@ -18,6 +18,8 @@ from core.logger import log, setup_logger
 from agents.manager import AgentManager
 from channels.telegram import TelegramBot
 from core.health import HealthMonitor
+from core.scheduler import Scheduler
+from core.jobs import register_jobs
 from panel.app import panel_routes
 
 
@@ -25,6 +27,7 @@ from panel.app import panel_routes
 agent_manager: AgentManager = None
 telegram_bot: TelegramBot = None
 health_monitor: HealthMonitor = None
+scheduler: Scheduler = None
 
 
 # --- HTTP API Routes ---
@@ -42,6 +45,7 @@ async def health(request: Request):
         "agents": len(config.agents),
         "providers": provider_status,
         "sessions": len(agent_manager.list_sessions()) if agent_manager else 0,
+        "scheduled_jobs": len(scheduler.get_jobs()) if scheduler else 0,
     })
 
 
@@ -81,6 +85,12 @@ async def api_sessions(request: Request):
     return JSONResponse({"sessions": db.get_all_sessions()})
 
 
+async def api_jobs(request: Request):
+    """List scheduled jobs and their status."""
+    jobs = scheduler.get_jobs() if scheduler else []
+    return JSONResponse({"jobs": jobs})
+
+
 async def api_reload(request: Request):
     """Reload configuration."""
     try:
@@ -95,7 +105,7 @@ async def api_reload(request: Request):
 # --- App Lifecycle ---
 
 async def startup():
-    global agent_manager, telegram_bot, health_monitor
+    global agent_manager, telegram_bot, health_monitor, scheduler
 
     config = get_config()
     setup_logger(level=config.gateway.log_level)
@@ -124,12 +134,28 @@ async def startup():
     else:
         log.warning("No Telegram token — bot disabled")
 
+    # Start scheduler
+    scheduler = Scheduler()
+    register_jobs(scheduler, config)
+    if telegram_bot and telegram_bot.app:
+        admin_chat_id = config.telegram.admin_chat_id or "613802669"
+        async def _notify(text):
+            try:
+                await telegram_bot.app.bot.send_message(chat_id=admin_chat_id, text=text)
+            except Exception as e:
+                log.error(f"Telegram notify failed: {e}")
+        scheduler.set_notify(_notify)
+    scheduler.start()
+    log.info(f"Scheduler started ({len(scheduler.get_jobs())} jobs)")
+
     log.info(f"Pawang ready on port {config.gateway.port}")
 
 
 async def shutdown():
-    global telegram_bot, health_monitor
+    global telegram_bot, health_monitor, scheduler
     log.info("Pawang shutting down...")
+    if scheduler:
+        scheduler.stop()
     if health_monitor:
         health_monitor.stop()
     if telegram_bot:
@@ -154,6 +180,7 @@ routes = [
     Route("/api/agents", api_agents),
     Route("/api/usage", api_usage),
     Route("/api/sessions", api_sessions),
+    Route("/api/jobs", api_jobs),
     Route("/api/reload", api_reload, methods=["POST"]),
 ] + panel_routes
 

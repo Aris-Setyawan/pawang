@@ -50,18 +50,41 @@ class AgentManager:
     def _session_key(self, agent_id: str, user_id: str) -> str:
         return f"{agent_id}:{user_id}"
 
+    def _build_system_prompt(self, agent: 'AgentConfig', user_id: str) -> str:
+        """Build system prompt with user memories injected."""
+        prompt_text = ""
+        if agent.system_prompt_file:
+            prompt_path = Path(__file__).parent.parent / agent.system_prompt_file
+            if prompt_path.exists():
+                prompt_text = prompt_path.read_text().strip()
+
+        # Inject user memories
+        db = get_db()
+        memories = db.get_memories(user_id, limit=30)
+        if memories:
+            mem_lines = [f"- ({m['category']}) {m['content']}" for m in memories]
+            prompt_text += (
+                "\n\n## User Memories\n"
+                "Fakta tentang user ini yang sudah kamu simpan sebelumnya:\n"
+                + "\n".join(mem_lines)
+                + "\n\nGunakan informasi ini untuk personalisasi jawaban. "
+                "Simpan fakta baru yang penting dengan tool save_memory."
+            )
+
+        return prompt_text
+
     def get_session(self, agent_id: str, user_id: str) -> Session:
         """Get or create a session, restoring from DB if available."""
         key = self._session_key(agent_id, user_id)
         if key not in self._sessions:
             session = Session(agent_id=agent_id, user_id=user_id)
 
-            # Load system prompt
+            # Load system prompt with memories
             agent = self.config.get_agent(agent_id)
-            if agent and agent.system_prompt_file:
-                prompt_path = Path(__file__).parent.parent / agent.system_prompt_file
-                if prompt_path.exists():
-                    session.add_message("system", prompt_path.read_text().strip())
+            if agent:
+                prompt_text = self._build_system_prompt(agent, user_id)
+                if prompt_text:
+                    session.add_message("system", prompt_text)
 
             # Restore from DB
             db = get_db()
@@ -106,6 +129,25 @@ class AgentManager:
         db.save_session_model(session.key, provider, model)
         log.info(f"Session {session.key} switched to {provider}/{model}")
 
+    def refresh_memories(self, agent_id: str, user_id: str):
+        """Refresh the system prompt in a cached session with latest memories."""
+        key = self._session_key(agent_id, user_id)
+        session = self._sessions.get(key)
+        if not session:
+            return
+        agent = self.config.get_agent(agent_id)
+        if not agent:
+            return
+        new_prompt = self._build_system_prompt(agent, user_id)
+        if not new_prompt:
+            return
+        # Replace the system message (always first)
+        if session.messages and session.messages[0].role == "system":
+            session.messages[0] = Message(role="system", content=new_prompt)
+        else:
+            session.messages.insert(0, Message(role="system", content=new_prompt))
+        log.info(f"Refreshed memories in session {key}")
+
     def list_sessions(self) -> list[Session]:
         return list(self._sessions.values())
 
@@ -131,7 +173,7 @@ class AgentManager:
 
     async def delegate(self, from_agent_id: str, to_agent_id: str,
                        user_id: str, task: str,
-                       chat_id: str = "613802669") -> str:
+                       chat_id: str = "") -> str:
         """Delegate a task from one agent to another.
 
         Runs a tool execution loop so the target agent can use its tools
@@ -204,7 +246,8 @@ class AgentManager:
                         args = json.loads(tc.arguments)
                     except json.JSONDecodeError:
                         args = {}
-                    result = await execute_tool(tc.name, args, chat_id)
+                    result = await execute_tool(tc.name, args, chat_id,
+                                                       user_id=user_id, agent_id=to_agent_id)
                     messages.append(Message(
                         role="tool", content=result.output,
                         tool_call_id=tc.id, name=tc.name,

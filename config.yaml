@@ -141,6 +141,7 @@ channels:
     token: ${TELEGRAM_BOT_TOKEN}
     allowed_users: []  # empty = semua boleh
     default_agent: agent1
+    admin_chat_id: "613802669"
 
 health:
   check_interval: 60
@@ -150,6 +151,12 @@ health:
     - [agent2, agent6]
     - [agent3, agent7]
     - [agent4, agent8]
+
+scheduler:
+  enabled: true
+  balance_alert_interval: 21600   # 6 jam
+  health_report_interval: 300     # 5 menit
+  db_cleanup_interval: 86400      # 24 jam
 
 panel:
   enabled: true

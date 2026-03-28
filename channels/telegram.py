@@ -42,6 +42,33 @@ class TelegramBot:
         self._disabled_keys: dict[str, str] = {}
         self._task_messages: dict[str, object] = {}  # user_id -> telegram message being edited
         self._thinking_mode: dict[int, str] = {}  # user_id -> effort level
+        self._voice_reply: dict[int, bool] = {}  # user_id -> voice reply enabled
+        self._restore_settings()
+
+    def _restore_settings(self):
+        """Restore user settings from DB."""
+        db = get_db()
+        for s in db.get_all_user_settings():
+            uid = int(s["user_id"])
+            if s["agent_id"]:
+                self._user_agent[uid] = s["agent_id"]
+            if s["thinking_mode"]:
+                self._thinking_mode[uid] = s["thinking_mode"]
+            if s["voice_reply"]:
+                self._voice_reply[uid] = True
+        count = len(db.get_all_user_settings())
+        if count:
+            log.info(f"Restored settings for {count} users")
+
+    def _save_settings(self, user_id: int):
+        """Persist current settings for a user to DB."""
+        db = get_db()
+        db.save_user_settings(
+            user_id=str(user_id),
+            agent_id=self._user_agent.get(user_id, ""),
+            thinking_mode=self._thinking_mode.get(user_id, ""),
+            voice_reply=self._voice_reply.get(user_id, False),
+        )
 
     def _get_agent_id(self, user_id: int) -> str:
         return self._user_agent.get(user_id, self.config.telegram.default_agent)
@@ -87,7 +114,7 @@ class TelegramBot:
     # --- Inline Keyboard Builders ---
 
     def _build_provider_keyboard(self) -> InlineKeyboardMarkup:
-        """Build provider selection grid (2 columns)."""
+        """Build provider selection grid (2 columns) with health status."""
         models = self.manager.list_available_models()
         by_provider: dict[str, int] = {}
         for m in models:
@@ -96,8 +123,9 @@ class TelegramBot:
         buttons = []
         row = []
         for provider, count in sorted(by_provider.items()):
+            emoji, _ = self._get_provider_status(provider)
             row.append(InlineKeyboardButton(
-                f"{provider} ({count})",
+                f"{emoji} {provider} ({count})",
                 callback_data=f"prov:{provider}:0",
             ))
             if len(row) == 2:
@@ -108,11 +136,20 @@ class TelegramBot:
 
         return InlineKeyboardMarkup(buttons)
 
-    def _build_model_keyboard(self, provider: str, page: int = 0) -> InlineKeyboardMarkup:
-        """Build model selection grid with pagination."""
+    def _build_model_keyboard(self, provider: str, page: int = 0,
+                              user_id: int = 0) -> InlineKeyboardMarkup:
+        """Build model selection grid with pagination and active marker."""
         prov = self.config.get_provider(provider)
         if not prov:
             return InlineKeyboardMarkup([])
+
+        # Get current active model for this user
+        active_model = ""
+        active_provider = ""
+        if user_id:
+            agent_id = self._get_agent_id(user_id)
+            session = self.manager.get_session(agent_id, str(user_id))
+            active_provider, active_model = self.manager.get_agent_model(session)
 
         all_models = prov.models
         total = len(all_models)
@@ -126,10 +163,12 @@ class TelegramBot:
         # Model buttons (1 per row for readability)
         buttons = []
         for model_id in page_models:
-            # Shorten display name if too long
             display = model_id
-            if len(display) > 40:
-                display = display[:37] + "..."
+            if len(display) > 38:
+                display = display[:35] + "..."
+            # Mark active model
+            if model_id == active_model and provider == active_provider:
+                display = f"\u2705 {display}"
             buttons.append([InlineKeyboardButton(
                 display,
                 callback_data=f"model:{provider}:{model_id[:45]}",
@@ -157,14 +196,28 @@ class TelegramBot:
 
         return InlineKeyboardMarkup(buttons)
 
+    # Agent role descriptions for UI
+    _AGENT_ROLES = {
+        "agent1": "\U0001f3af Orchestrator",
+        "agent2": "\U0001f3a8 Creative",
+        "agent3": "\U0001f4ca Analyst",
+        "agent4": "\U0001f4bb Coder",
+    }
+
     def _build_agent_keyboard(self, current_agent_id: str) -> InlineKeyboardMarkup:
-        """Build agent selection grid."""
+        """Build agent selection grid — primary agents only, with roles."""
         buttons = []
         for agent in self.config.agents:
-            marker = " *" if agent.id == current_agent_id else ""
+            # Skip backup agents (agent5-8)
+            if agent.id not in self._AGENT_ROLES:
+                continue
+            role = self._AGENT_ROLES.get(agent.id, "")
+            if agent.id == current_agent_id:
+                label = f"\u2705 {agent.name} — {role}"
+            else:
+                label = f"{agent.name} — {role}"
             buttons.append([InlineKeyboardButton(
-                f"{agent.name} ({agent.id}){marker}",
-                callback_data=f"agent:{agent.id}",
+                label, callback_data=f"agent:{agent.id}",
             )])
         return InlineKeyboardMarkup(buttons)
 
@@ -205,7 +258,7 @@ class TelegramBot:
 
             prov = self.config.get_provider(provider)
             count = len(prov.models) if prov else 0
-            keyboard = self._build_model_keyboard(provider, page)
+            keyboard = self._build_model_keyboard(provider, page, user_id=user_id)
             await query.edit_message_text(
                 f"{provider} — {count} models\nSelect a model:",
                 reply_markup=keyboard,
@@ -292,9 +345,116 @@ class TelegramBot:
             agent = self.config.get_agent(agent_id)
             if agent:
                 self._user_agent[user_id] = agent_id
+                self._save_settings(user_id)
                 await query.edit_message_text(
                     f"Switched to agent {agent.name} ({agent.id})"
                 )
+
+        # --- Settings callbacks ---
+        elif data == "set:think":
+            # Toggle thinking on/off
+            if user_id in self._thinking_mode:
+                del self._thinking_mode[user_id]
+            else:
+                self._thinking_mode[user_id] = "high"
+            self._save_settings(user_id)
+            keyboard = self._build_settings_keyboard(user_id)
+            await query.edit_message_reply_markup(reply_markup=keyboard)
+
+        elif data.startswith("set:think:"):
+            level = data.split(":")[2]
+            if level in ("low", "medium", "high", "max"):
+                self._thinking_mode[user_id] = level
+                self._save_settings(user_id)
+            keyboard = self._build_settings_keyboard(user_id)
+            await query.edit_message_reply_markup(reply_markup=keyboard)
+
+        elif data == "set:voice":
+            # Toggle voice reply
+            current = self._voice_reply.get(user_id, False)
+            self._voice_reply[user_id] = not current
+            self._save_settings(user_id)
+            keyboard = self._build_settings_keyboard(user_id)
+            await query.edit_message_reply_markup(reply_markup=keyboard)
+
+        elif data == "set:agent":
+            current = self._get_agent_id(user_id)
+            keyboard = self._build_agent_keyboard(current)
+            await query.edit_message_text(
+                "Select an agent:", reply_markup=keyboard,
+            )
+
+        elif data == "set:model":
+            keyboard = self._build_provider_keyboard()
+            await query.edit_message_text(
+                "Select a provider:", reply_markup=keyboard,
+            )
+
+        elif data == "set:memory":
+            uid_str = str(user_id)
+            db = get_db()
+            memories = db.get_memories(uid_str, limit=20)
+            if not memories:
+                await query.edit_message_text("Belum ada memory tersimpan.")
+                return
+            lines = ["\U0001f4dd Stored Memories:\n"]
+            buttons = []
+            for m in memories:
+                lines.append(f"[{m['id']}] ({m['category']}) {m['content']}")
+            for m in memories[:10]:
+                short = m['content'][:30] + "..." if len(m['content']) > 30 else m['content']
+                buttons.append([InlineKeyboardButton(
+                    f"\u274c {short}", callback_data=f"memdel:{m['id']}",
+                )])
+            buttons.append([InlineKeyboardButton(
+                "\u2b05 Back", callback_data="set:back",
+            )])
+            text = "\n".join(lines)
+            if len(text) > 4096:
+                text = text[:4093] + "..."
+            await query.edit_message_text(
+                text, reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        elif data.startswith("memdel:"):
+            mem_id = int(data.split(":")[1])
+            uid_str = str(user_id)
+            db = get_db()
+            db.delete_memory(mem_id, uid_str)
+            # Refresh memory list
+            memories = db.get_memories(uid_str, limit=20)
+            if not memories:
+                await query.edit_message_text("Semua memory dihapus.")
+                return
+            lines = ["\U0001f4dd Stored Memories:\n"]
+            buttons = []
+            for m in memories:
+                lines.append(f"[{m['id']}] ({m['category']}) {m['content']}")
+            for m in memories[:10]:
+                short = m['content'][:30] + "..." if len(m['content']) > 30 else m['content']
+                buttons.append([InlineKeyboardButton(
+                    f"\u274c {short}", callback_data=f"memdel:{m['id']}",
+                )])
+            buttons.append([InlineKeyboardButton(
+                "\u2b05 Back", callback_data="set:back",
+            )])
+            text = "\n".join(lines)
+            await query.edit_message_text(
+                text, reply_markup=InlineKeyboardMarkup(buttons),
+            )
+
+        elif data == "memclear":
+            uid_str = str(user_id)
+            db = get_db()
+            db.conn.execute("DELETE FROM memories WHERE user_id = ?", (uid_str,))
+            db.conn.commit()
+            await query.edit_message_text("Semua memory dihapus.")
+
+        elif data == "set:back":
+            keyboard = self._build_settings_keyboard(user_id)
+            await query.edit_message_text(
+                "\u2699\ufe0f Settings", reply_markup=keyboard,
+            )
 
     # --- Commands ---
 
@@ -315,7 +475,9 @@ class TelegramBot:
             "/skill [name] - Run a skill\n"
             "/clear - Reset percakapan\n"
             "/status - Status saat ini\n"
-            "/usage - Statistik penggunaan"
+            "/usage - Statistik penggunaan\n"
+            "/settings - Pengaturan (thinking, voice, dll)\n"
+            "/memory - Lihat/kelola memory tersimpan"
         )
 
     def _build_provider_mgmt_keyboard(self) -> InlineKeyboardMarkup:
@@ -491,6 +653,7 @@ class TelegramBot:
             return
 
         self._user_agent[update.effective_user.id] = agent_id
+        self._save_settings(update.effective_user.id)
         await update.message.reply_text(
             f"Switched to agent {agent.name} ({agent.id})"
         )
@@ -641,6 +804,7 @@ class TelegramBot:
                     "Levels: low | medium | high | max\n"
                     "Usage: /think [level] atau /think off"
                 )
+            self._save_settings(uid)
             return
 
         level = args[0].lower()
@@ -654,6 +818,8 @@ class TelegramBot:
             await update.message.reply_text(
                 "Usage: /think [low|medium|high|max|off]"
             )
+            return
+        self._save_settings(uid)
 
     async def _cmd_skill(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Execute a skill or list available skills.
@@ -759,6 +925,97 @@ class TelegramBot:
 
         await update.message.reply_text("\n".join(lines))
 
+    # --- Settings ---
+
+    def _build_settings_keyboard(self, uid: int) -> InlineKeyboardMarkup:
+        """Build settings inline keyboard."""
+        # Thinking mode
+        think_on = uid in self._thinking_mode
+        think_level = self._thinking_mode.get(uid, "off")
+        think_label = f"\U0001f9e0 Thinking: {think_level}" if think_on else "\U0001f9e0 Thinking: off"
+
+        # Voice reply
+        voice_on = self._voice_reply.get(uid, False)
+        voice_label = "\U0001f50a Voice Reply: on" if voice_on else "\U0001f508 Voice Reply: off"
+
+        # Current agent & model
+        agent_id = self._get_agent_id(uid)
+        agent = self.config.get_agent(agent_id)
+        session = self.manager.get_session(agent_id, str(uid))
+        _, model = self.manager.get_agent_model(session)
+
+        buttons = [
+            [InlineKeyboardButton(think_label, callback_data="set:think")],
+            [
+                InlineKeyboardButton("\U0001f9e0 low", callback_data="set:think:low"),
+                InlineKeyboardButton("med", callback_data="set:think:medium"),
+                InlineKeyboardButton("high", callback_data="set:think:high"),
+                InlineKeyboardButton("max", callback_data="set:think:max"),
+            ],
+            [InlineKeyboardButton(voice_label, callback_data="set:voice")],
+            [InlineKeyboardButton(
+                f"\U0001f916 Agent: {agent.name}" if agent else "\U0001f916 Agent",
+                callback_data="set:agent",
+            )],
+            [InlineKeyboardButton(
+                f"\u2699\ufe0f Model: {model[:30]}",
+                callback_data="set:model",
+            )],
+            [InlineKeyboardButton(
+                "\U0001f4dd Memories", callback_data="set:memory",
+            )],
+        ]
+        return InlineKeyboardMarkup(buttons)
+
+    async def _cmd_settings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """User settings — thinking, voice reply, agent, model, memories."""
+        if not self._is_allowed(update.effective_user.id):
+            return
+        uid = update.effective_user.id
+        keyboard = self._build_settings_keyboard(uid)
+        await update.message.reply_text(
+            "\u2699\ufe0f Settings", reply_markup=keyboard,
+        )
+
+    # --- Memory Management ---
+
+    async def _cmd_memory(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """View and manage stored memories."""
+        if not self._is_allowed(update.effective_user.id):
+            return
+        user_id = str(update.effective_user.id)
+        db = get_db()
+        memories = db.get_memories(user_id, limit=20)
+
+        if not memories:
+            await update.message.reply_text(
+                "Belum ada memory tersimpan.\n"
+                "Agent akan otomatis menyimpan fakta penting dari percakapan."
+            )
+            return
+
+        lines = ["\U0001f4dd Stored Memories:\n"]
+        for m in memories:
+            lines.append(f"[{m['id']}] ({m['category']}) {m['content']}")
+
+        buttons = []
+        # Show delete buttons for each memory (max 10)
+        for m in memories[:10]:
+            short = m['content'][:30] + "..." if len(m['content']) > 30 else m['content']
+            buttons.append([InlineKeyboardButton(
+                f"\u274c {short}",
+                callback_data=f"memdel:{m['id']}",
+            )])
+        buttons.append([InlineKeyboardButton(
+            "\U0001f5d1 Clear All", callback_data="memclear",
+        )])
+
+        keyboard = InlineKeyboardMarkup(buttons)
+        text = "\n".join(lines)
+        if len(text) > 4096:
+            text = text[:4093] + "..."
+        await update.message.reply_text(text, reply_markup=keyboard)
+
     # --- Task-Aware Message Handler ---
 
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -843,6 +1100,57 @@ class TelegramBot:
         # --- Start new task ---
         await self._run_task(update, user_id)
 
+    async def _handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle voice/audio messages: transcribe then process as text."""
+        if not update.message:
+            return
+        if not self._is_allowed(update.effective_user.id):
+            return
+
+        import tempfile
+        from core.transcribe import transcribe
+
+        voice = update.message.voice or update.message.audio
+        if not voice:
+            return
+
+        user_id = str(update.effective_user.id)
+        await update.message.chat.send_action(ChatAction.TYPING)
+
+        # Download voice file
+        try:
+            tg_file = await voice.get_file()
+            suffix = ".ogg" if update.message.voice else ".mp3"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp_path = tmp.name
+            await tg_file.download_to_drive(tmp_path)
+        except Exception as e:
+            log.error(f"Voice download error: {e}")
+            await update.message.reply_text(f"Gagal download voice: {e}")
+            return
+
+        # Transcribe
+        try:
+            text = await transcribe(tmp_path)
+        except Exception as e:
+            log.error(f"Transcribe error: {e}")
+            await update.message.reply_text(f"Gagal transcribe voice: {e}")
+            return
+        finally:
+            import os
+            os.unlink(tmp_path)
+
+        if not text:
+            await update.message.reply_text("Voice kosong / tidak terdeteksi.")
+            return
+
+        # Show transcription
+        await update.message.reply_text(f"🎤 \"{text}\"")
+
+        # Process as text message — inject text into update and reuse _handle_message
+        update.message.text = text
+        await self._handle_message(update, context)
+
     async def _handle_stop(self, update: Update, user_id: str, task):
         """Stop/pause running task, save partial response."""
         task = self.tasks.pause_task(user_id)
@@ -915,6 +1223,22 @@ class TelegramBot:
                 return name, prov.models[0]
         return None, None
 
+    async def _send_voice_reply(self, chat_id: int, text: str):
+        """TTS the text and send as voice message. Best-effort, errors logged."""
+        import os
+        from core.tts import text_to_speech
+
+        if not text or len(text) > 3000:
+            return  # Too long for TTS
+
+        try:
+            audio_path = await text_to_speech(text[:2000])
+            with open(audio_path, "rb") as f:
+                await self.app.bot.send_voice(chat_id=chat_id, voice=f)
+            os.unlink(audio_path)
+        except Exception as e:
+            log.warning(f"Voice reply error: {e}")
+
     async def _run_tool_loop(self, update: Update, user_id: str, session,
                               agent_id: str, provider_name: str, model: str,
                               tools: list[dict]):
@@ -974,6 +1298,11 @@ class TelegramBot:
                     self.manager.save_message(session, "assistant", final_text,
                                               model=model, provider=provider_name)
                     self._record_health(provider_name, True)
+
+                    # Voice reply if enabled
+                    uid_int = update.effective_user.id
+                    if self._voice_reply.get(uid_int, False):
+                        await self._send_voice_reply(update.effective_chat.id, final_text)
 
                     latency = (time.monotonic() - start_time) * 1000
                     db = get_db()
@@ -1036,7 +1365,8 @@ class TelegramBot:
                         ))
                     else:
                         # Regular tool execution
-                        result = await execute_tool(tc.name, args, chat_id)
+                        result = await execute_tool(tc.name, args, chat_id,
+                                                           user_id=user_id, agent_id=agent_id)
                         messages.append(Message(
                             role="tool", content=result.output,
                             tool_call_id=tc.id, name=tc.name,
@@ -1186,6 +1516,11 @@ class TelegramBot:
                 self.manager.save_message(session, "assistant", full_text,
                                           model=model, provider=provider_name)
 
+                # Voice reply if enabled
+                uid_int = update.effective_user.id
+                if self._voice_reply.get(uid_int, False):
+                    await self._send_voice_reply(update.effective_chat.id, full_text)
+
             db = get_db()
             input_tokens = sum(len(m.content) for m in session.get_messages()) // 4
             output_tokens = len(full_text) // 4
@@ -1308,9 +1643,14 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("clear", self._cmd_clear))
         self.app.add_handler(CommandHandler("status", self._cmd_status))
         self.app.add_handler(CommandHandler("usage", self._cmd_usage))
+        self.app.add_handler(CommandHandler("settings", self._cmd_settings))
+        self.app.add_handler(CommandHandler("memory", self._cmd_memory))
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
+        )
+        self.app.add_handler(
+            MessageHandler(filters.VOICE | filters.AUDIO, self._handle_voice)
         )
 
         await self.app.bot.set_my_commands([
@@ -1325,6 +1665,8 @@ class TelegramBot:
             BotCommand("clear", "Reset percakapan"),
             BotCommand("status", "Status agent & model"),
             BotCommand("usage", "Statistik penggunaan"),
+            BotCommand("settings", "Pengaturan bot"),
+            BotCommand("memory", "Lihat/kelola memory"),
         ])
 
         log.info("Telegram bot configured")

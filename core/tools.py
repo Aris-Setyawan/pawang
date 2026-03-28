@@ -191,6 +191,67 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "save_memory",
+            "description": "Simpan fakta/preferensi tentang user yang penting untuk diingat di percakapan mendatang. Contoh: nama, lokasi, pekerjaan, preferensi, project yang sedang dikerjakan.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Fakta yang ingin disimpan (singkat, jelas)",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["profile", "preference", "project", "general"],
+                        "description": "Kategori memory: profile (data diri), preference (preferensi), project (project/pekerjaan), general (lain-lain)",
+                    },
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_memories",
+            "description": "Cari/lihat memory yang tersimpan tentang user. Tanpa query = lihat semua, dengan query = search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Kata kunci pencarian (opsional, kosongkan untuk lihat semua)",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["profile", "preference", "project", "general"],
+                        "description": "Filter berdasarkan kategori (opsional)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_memory",
+            "description": "Hapus memory tertentu berdasarkan ID. Gunakan recall_memories dulu untuk lihat ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "integer",
+                        "description": "ID memory yang ingin dihapus",
+                    },
+                },
+                "required": ["memory_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "weather",
             "description": "Cek cuaca saat ini dan prakiraan 3 hari",
             "parameters": {
@@ -212,12 +273,12 @@ TOOL_DEFINITIONS = [
 
 # Which tools each agent can use
 AGENT_TOOLS = {
-    "agent1": ["delegate_task", "check_balances", "web_search", "weather"],
+    "agent1": ["delegate_task", "check_balances", "web_search", "weather", "save_memory", "recall_memories", "delete_memory"],
     "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash"],
     "agent3": ["web_search", "weather", "run_bash"],
     "agent4": ["run_bash", "send_file", "web_search"],
     # Backup agents mirror their primary
-    "agent5": ["delegate_task", "check_balances", "web_search", "weather"],
+    "agent5": ["delegate_task", "check_balances", "web_search", "weather", "save_memory", "recall_memories", "delete_memory"],
     "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash"],
     "agent7": ["web_search", "weather", "run_bash"],
     "agent8": ["run_bash", "send_file", "web_search"],
@@ -296,8 +357,13 @@ async def _run_bash(command: str, timeout: int = 30) -> ToolResult:
         return ToolResult(name="bash", output=str(e), success=False)
 
 
-async def execute_tool(name: str, arguments: dict, chat_id: str = "613802669") -> ToolResult:
+async def execute_tool(name: str, arguments: dict, chat_id: str = "",
+                       user_id: str = "", agent_id: str = "") -> ToolResult:
     """Execute a tool by name with given arguments."""
+    # Inject user/agent context for memory tools
+    if name in ("save_memory", "recall_memories", "delete_memory"):
+        arguments["_user_id"] = user_id
+        arguments["_agent_id"] = agent_id
     log.info(f"Tool call: {name}({arguments})")
 
     if name == "check_balances":
@@ -340,6 +406,51 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "613802669") -
         skill = WeatherSkill()
         result = await skill.execute(arguments.get("location", "Jakarta"))
         return ToolResult(name="weather", output=result.output, success=result.success)
+
+    elif name == "save_memory":
+        from core.database import get_db
+        db = get_db()
+        content = arguments.get("content", "")
+        category = arguments.get("category", "general")
+        if not content:
+            return ToolResult(name="save_memory", output="Error: content kosong", success=False)
+        user_id = arguments.get("_user_id", "unknown")
+        agent_id = arguments.get("_agent_id", "")
+        mem_id = db.save_memory(user_id, content, category, agent_id)
+        # Refresh memories in active session
+        try:
+            from main import agent_manager
+            if agent_manager:
+                agent_manager.refresh_memories(agent_id, user_id)
+        except Exception:
+            pass
+        return ToolResult(name="save_memory", output=f"Memory disimpan (id={mem_id}, category={category}): {content}", success=True)
+
+    elif name == "recall_memories":
+        from core.database import get_db
+        db = get_db()
+        user_id = arguments.get("_user_id", "unknown")
+        query = arguments.get("query", "")
+        category = arguments.get("category")
+        if query:
+            memories = db.search_memories(user_id, query)
+        else:
+            memories = db.get_memories(user_id, category=category)
+        if not memories:
+            return ToolResult(name="recall_memories", output="Belum ada memory tersimpan untuk user ini.", success=True)
+        lines = []
+        for m in memories:
+            lines.append(f"[{m['id']}] ({m['category']}) {m['content']}")
+        return ToolResult(name="recall_memories", output="\n".join(lines), success=True)
+
+    elif name == "delete_memory":
+        from core.database import get_db
+        db = get_db()
+        user_id = arguments.get("_user_id", "unknown")
+        memory_id = arguments.get("memory_id", 0)
+        if db.delete_memory(memory_id, user_id):
+            return ToolResult(name="delete_memory", output=f"Memory #{memory_id} dihapus.", success=True)
+        return ToolResult(name="delete_memory", output=f"Memory #{memory_id} tidak ditemukan.", success=False)
 
     else:
         return ToolResult(name=name, output=f"Unknown tool: {name}", success=False)

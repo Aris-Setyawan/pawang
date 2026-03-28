@@ -69,6 +69,26 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
             CREATE INDEX IF NOT EXISTS idx_usage_provider ON usage(provider);
+
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                category TEXT DEFAULT 'general',
+                agent_id TEXT DEFAULT '',
+                created_at REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+            CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(user_id, category);
+
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id TEXT PRIMARY KEY,
+                agent_id TEXT DEFAULT '',
+                thinking_mode TEXT DEFAULT '',
+                voice_reply INTEGER DEFAULT 0,
+                updated_at REAL NOT NULL
+            );
         """)
         self.conn.commit()
         log.info(f"Database initialized: {self.path}")
@@ -172,6 +192,89 @@ class Database:
             "messages": dict(row),
             "usage": dict(usage),
         }
+
+    # --- Memory ---
+
+    def save_memory(self, user_id: str, content: str, category: str = "general",
+                    agent_id: str = ""):
+        """Save a fact/memory about a user."""
+        # Avoid exact duplicates
+        existing = self.conn.execute(
+            "SELECT id FROM memories WHERE user_id = ? AND content = ?",
+            (user_id, content),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+
+        self.conn.execute(
+            "INSERT INTO memories (user_id, content, category, agent_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, content, category, agent_id, time.time()),
+        )
+        self.conn.commit()
+        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_memories(self, user_id: str, category: Optional[str] = None,
+                     limit: int = 50) -> list[dict]:
+        """Get memories for a user, optionally filtered by category."""
+        if category:
+            rows = self.conn.execute(
+                "SELECT id, content, category, agent_id, created_at FROM memories "
+                "WHERE user_id = ? AND category = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, category, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT id, content, category, agent_id, created_at FROM memories "
+                "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_memory(self, memory_id: int, user_id: str) -> bool:
+        """Delete a specific memory by ID (scoped to user for safety)."""
+        cur = self.conn.execute(
+            "DELETE FROM memories WHERE id = ? AND user_id = ?",
+            (memory_id, user_id),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def search_memories(self, user_id: str, query: str, limit: int = 20) -> list[dict]:
+        """Search memories by keyword (simple LIKE match)."""
+        rows = self.conn.execute(
+            "SELECT id, content, category, agent_id, created_at FROM memories "
+            "WHERE user_id = ? AND content LIKE ? ORDER BY created_at DESC LIMIT ?",
+            (user_id, f"%{query}%", limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # --- User Settings ---
+
+    def save_user_settings(self, user_id: str, agent_id: str = "",
+                           thinking_mode: str = "", voice_reply: bool = False):
+        """Save user preferences."""
+        self.conn.execute(
+            "INSERT INTO user_settings (user_id, agent_id, thinking_mode, voice_reply, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "agent_id = ?, thinking_mode = ?, voice_reply = ?, updated_at = ?",
+            (user_id, agent_id, thinking_mode, int(voice_reply), time.time(),
+             agent_id, thinking_mode, int(voice_reply), time.time()),
+        )
+        self.conn.commit()
+
+    def get_user_settings(self, user_id: str) -> Optional[dict]:
+        """Get user preferences."""
+        row = self.conn.execute(
+            "SELECT * FROM user_settings WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_all_user_settings(self) -> list[dict]:
+        """Get all user settings for bulk restore."""
+        rows = self.conn.execute("SELECT * FROM user_settings").fetchall()
+        return [dict(r) for r in rows]
 
     def close(self):
         self.conn.close()

@@ -57,6 +57,7 @@ class TelegramConfig:
     token: str
     allowed_users: list[int] = field(default_factory=list)
     default_agent: str = "agent1"
+    admin_chat_id: str = ""
 
 
 @dataclass
@@ -82,6 +83,14 @@ class PanelConfig:
 
 
 @dataclass
+class SchedulerConfig:
+    enabled: bool = True
+    balance_alert_interval: int = 21600  # 6 hours
+    health_report_interval: int = 300    # 5 minutes
+    db_cleanup_interval: int = 86400     # 24 hours
+
+
+@dataclass
 class PawangConfig:
     gateway: GatewayConfig
     providers: dict[str, ProviderConfig]
@@ -89,6 +98,7 @@ class PawangConfig:
     telegram: TelegramConfig
     health: HealthConfig
     panel: PanelConfig
+    scheduler: SchedulerConfig
 
     def get_provider(self, name: str) -> Optional[ProviderConfig]:
         return self.providers.get(name)
@@ -134,6 +144,9 @@ def load_config(path: Path = CONFIG_PATH) -> PawangConfig:
         password=auth.get("password", ""),
     )
 
+    scheduler_raw = raw.get("scheduler", {})
+    scheduler = SchedulerConfig(**scheduler_raw)
+
     return PawangConfig(
         gateway=gateway,
         providers=providers,
@@ -141,6 +154,7 @@ def load_config(path: Path = CONFIG_PATH) -> PawangConfig:
         telegram=telegram,
         health=health,
         panel=panel,
+        scheduler=scheduler,
     )
 
 
