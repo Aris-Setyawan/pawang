@@ -71,36 +71,36 @@ providers:
 
 agents:
   - id: agent1
-    name: Santa
-    model: qwen-plus
-    provider: modelstudio
+    name: Wulan
+    model: deepseek-chat
+    provider: deepseek
     system_prompt_file: prompts/agent1.md
     channels: [telegram]
     max_context_tokens: 128000
     temperature: 0.7
 
   - id: agent2
-    name: Creative
-    model: qwen-plus
-    provider: modelstudio
+    name: Rani
+    model: gemini-2.0-flash
+    provider: google
     system_prompt_file: prompts/agent2.md
     channels: []
     max_context_tokens: 64000
     temperature: 0.9
 
   - id: agent3
-    name: Analyst
-    model: qwen-max
-    provider: modelstudio
+    name: Dewi
+    model: deepseek-chat
+    provider: deepseek
     system_prompt_file: prompts/agent3.md
     channels: []
     max_context_tokens: 64000
     temperature: 0.3
 
   - id: agent4
-    name: Coder
-    model: qwen2.5-coder-32b-instruct
-    provider: modelstudio
+    name: Bima
+    model: deepseek-chat
+    provider: deepseek
     system_prompt_file: prompts/agent4.md
     channels: []
     max_context_tokens: 64000
@@ -108,36 +108,36 @@ agents:
 
   # Backup / Failover agents
   - id: agent5
-    name: Backup Orchestrator
-    model: qwen-plus
-    provider: modelstudio
+    name: Wulan B
+    model: gemini-2.0-flash
+    provider: google
     system_prompt_file: prompts/agent5.md
     channels: []
     max_context_tokens: 128000
     temperature: 0.7
 
   - id: agent6
-    name: Backup Creative
-    model: qwen-plus
-    provider: modelstudio
+    name: Rani B
+    model: gpt-4o-mini
+    provider: openai
     system_prompt_file: prompts/agent6.md
     channels: []
     max_context_tokens: 64000
     temperature: 0.9
 
   - id: agent7
-    name: Backup Analyst
-    model: qwen-max
-    provider: modelstudio
+    name: Dewi B
+    model: gemini-2.5-flash
+    provider: google
     system_prompt_file: prompts/agent7.md
     channels: []
     max_context_tokens: 64000
     temperature: 0.3
 
   - id: agent8
-    name: Backup Coder
-    model: qwen2.5-coder-32b-instruct
-    provider: modelstudio
+    name: Bima B
+    model: gpt-4o-mini
+    provider: openai
     system_prompt_file: prompts/agent8.md
     channels: []
     max_context_tokens: 64000
