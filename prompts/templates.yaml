@@ -1,0 +1,35 @@
+# Template responses for local inference (no API needed)
+# Used when all providers are down or no API key available
+
+patterns:
+  - triggers: ["halo", "hai", "hi", "hello", "hey"]
+    response: "Halo! Saya {name}, siap bantu. Ada yang bisa saya bantu?"
+
+  - triggers: ["siapa kamu", "who are you", "nama kamu"]
+    response: "Saya {name}, AI assistant multi-agent dari Pawang gateway. Saya bisa bantu dengan berbagai tugas — coding, analisis, creative, dan lainnya."
+
+  - triggers: ["terima kasih", "makasih", "thanks", "thank you"]
+    response: "Sama-sama! Senang bisa membantu. Kalau ada yang lain, tinggal bilang ya."
+
+  - triggers: ["bye", "dadah", "sampai jumpa", "goodbye"]
+    response: "Sampai jumpa! Kalau butuh bantuan lagi, saya selalu siap."
+
+  - triggers: ["apa kabar", "how are you", "kabar"]
+    response: "Saya baik! Selalu siap bantu. Apa yang bisa saya kerjakan untuk kamu?"
+
+  - triggers: ["help", "bantuan", "tolong", "bingung"]
+    response: |
+      Saya bisa bantu dengan:
+      - Coding & debugging
+      - Analisis data & riset
+      - Creative (gambar, video, audio)
+      - Terjemahan & perhitungan
+      - Pencarian web & Wikipedia
+
+      Ketik pertanyaan atau perintah, atau pakai /help untuk daftar command.
+
+  - triggers: ["cuaca", "weather"]
+    response: "Untuk cek cuaca, pakai perintah: /skill weather <kota>"
+
+  - triggers: ["jam berapa", "what time", "waktu"]
+    response: "Maaf, saya tidak bisa cek waktu secara real-time saat offline. Coba cek perangkat kamu langsung."

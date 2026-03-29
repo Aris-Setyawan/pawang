@@ -1752,6 +1752,15 @@ class TelegramBot:
                                      text=final_text[:200])
                     self._record_health(provider_name, True)
 
+                    # Learning: extract knowledge (tool responses not cached)
+                    try:
+                        from core.learning import on_message_sent as learn_hook
+                        user_prompt = update.message.text or ""
+                        learn_hook(agent_id, user_id, session.key,
+                                   user_prompt, final_text)
+                    except Exception:
+                        pass
+
                     # Voice reply if enabled
                     uid_int = update.effective_user.id
                     if self._voice_reply.get(uid_int, False):
@@ -1901,6 +1910,21 @@ class TelegramBot:
             await hooks.emit("message:received", user_id=user_id, agent_id=agent_id,
                              text=prompt, routed=was_routed)
 
+        # Response cache lookup — skip API call if cached
+        if not resume_from:
+            try:
+                from core.response_cache import get_response_cache
+                cached = get_response_cache().lookup(prompt, agent_id)
+                if cached:
+                    self.manager.save_message(session, "assistant", cached,
+                                              model="cache", provider="local")
+                    await update.message.reply_text(cached[:4096])
+                    await hooks.emit("message:sent", user_id=user_id, agent_id=agent_id,
+                                     text=cached[:200])
+                    return
+            except Exception:
+                pass
+
         # Check if agent has tools — use tool loop instead of streaming
         from core.tools import get_agent_tools
         tools = get_agent_tools(agent_id)
@@ -2014,6 +2038,16 @@ class TelegramBot:
                 await hooks.emit("message:sent", user_id=user_id, agent_id=agent_id,
                                  text=full_text[:200])
 
+                # Learning: extract knowledge + cache response
+                try:
+                    from core.learning import on_message_sent as learn_hook
+                    from core.response_cache import get_response_cache
+                    learn_hook(agent_id, user_id, session.key, prompt, full_text)
+                    get_response_cache().store(prompt, full_text, provider_name,
+                                               model, agent_id)
+                except Exception:
+                    pass
+
                 # Voice reply if enabled
                 uid_int = update.effective_user.id
                 if self._voice_reply.get(uid_int, False):
@@ -2037,6 +2071,21 @@ class TelegramBot:
             db = get_db()
             db.record_usage(provider_name, model, agent_id, user_id,
                             0, 0, latency, success=False, error=str(e)[:200])
+
+            # Local inference fallback before failover
+            try:
+                from core.local_inference import generate as local_generate
+                agent = self.config.get_agent(agent_id)
+                local_resp = local_generate(prompt, agent_id, user_id,
+                                             agent.name if agent else "")
+                if local_resp:
+                    self.manager.save_message(session, "assistant", local_resp,
+                                              model="local", provider="local")
+                    await update.message.reply_text(local_resp[:4096])
+                    self._task_messages.pop(user_id, None)
+                    return
+            except Exception:
+                pass
 
             fallback_ok = await self._try_failover(agent_id, session, update)
             if not fallback_ok:

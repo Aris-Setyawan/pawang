@@ -98,6 +98,32 @@ async def db_cleanup(scheduler):
         log.error(f"DB cleanup error: {e}")
 
 
+async def learn_from_history(scheduler):
+    """Batch extract knowledge from recent conversations."""
+    try:
+        from core.learning import batch_learn_from_history
+        batch_learn_from_history(hours=6)
+    except Exception as e:
+        log.error(f"Learning job error: {e}")
+
+
+async def cache_and_knowledge_cleanup(scheduler):
+    """Clean expired cache entries and decay old knowledge."""
+    try:
+        from core.response_cache import get_response_cache
+        get_response_cache().cleanup_expired()
+    except Exception as e:
+        log.warning(f"Cache cleanup error: {e}")
+
+    try:
+        from core.knowledge import get_knowledge_base
+        kb = get_knowledge_base()
+        kb.decay_old(days=30)
+        kb.cleanup(max_entries=10000)
+    except Exception as e:
+        log.warning(f"Knowledge cleanup error: {e}")
+
+
 def register_jobs(scheduler, config=None):
     """Register all scheduled jobs. Intervals from config if provided."""
     from core.config import get_config
@@ -115,6 +141,12 @@ def register_jobs(scheduler, config=None):
     async def _db_cleanup():
         await db_cleanup(scheduler)
 
+    async def _learn():
+        await learn_from_history(scheduler)
+
+    async def _cache_cleanup():
+        await cache_and_knowledge_cleanup(scheduler)
+
     scheduler.add_job("balance_alert", interval=sched_cfg.balance_alert_interval,
                        func=_balance_alert, enabled=sched_cfg.enabled)
 
@@ -123,3 +155,10 @@ def register_jobs(scheduler, config=None):
 
     scheduler.add_job("db_cleanup", interval=sched_cfg.db_cleanup_interval,
                        func=_db_cleanup, enabled=sched_cfg.enabled)
+
+    # Learning & cache jobs
+    scheduler.add_job("learn_from_history", interval=21600,
+                       func=_learn, enabled=sched_cfg.enabled)
+
+    scheduler.add_job("cache_cleanup", interval=86400,
+                       func=_cache_cleanup, enabled=sched_cfg.enabled)

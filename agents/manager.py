@@ -122,6 +122,25 @@ class AgentManager:
                 "Simpan fakta baru yang penting dengan tool save_memory."
             )
 
+        # Inject learned knowledge (top high-confidence entries)
+        try:
+            from core.knowledge import get_knowledge_base
+            kb = get_knowledge_base()
+            stats = kb.get_stats()
+            if stats.get("total", 0) > 0:
+                top_knowledge = kb.search("", limit=10, min_confidence=0.7)
+                if top_knowledge:
+                    lines = [f"- Q: {k['question'][:80]} -> A: {k['answer'][:120]}"
+                             for k in top_knowledge]
+                    prompt_text += (
+                        "\n\n## Learned Knowledge\n"
+                        "Pengetahuan yang sudah dipelajari dari interaksi sebelumnya "
+                        f"({stats['total']} entries, avg confidence {stats.get('avg_conf', 0):.1%}):\n"
+                        + "\n".join(lines[:10])
+                    )
+        except Exception:
+            pass
+
         return prompt_text
 
     def get_session(self, agent_id: str, user_id: str) -> Session:
