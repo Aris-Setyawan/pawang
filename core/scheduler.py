@@ -27,6 +27,27 @@ class Scheduler:
         self._jobs: dict[str, ScheduledJob] = {}
         self._task: Optional[asyncio.Task] = None
         self._notify_func: Optional[Callable] = None  # async func(text) -> send to Telegram
+        self._saved_states: dict[str, dict] = {}
+        self._load_states()
+
+    def _load_states(self):
+        """Load persisted job states from DB."""
+        try:
+            from core.database import get_db
+            self._saved_states = get_db().get_job_states()
+            if self._saved_states:
+                log.info(f"Scheduler: loaded {len(self._saved_states)} saved job states")
+        except Exception as e:
+            log.warning(f"Scheduler: could not load states: {e}")
+
+    def _persist_job(self, job: ScheduledJob):
+        """Save job state to DB after each run."""
+        try:
+            from core.database import get_db
+            get_db().save_job_state(job.name, job.last_run, job.run_count,
+                                    job.last_error, job.enabled)
+        except Exception as e:
+            log.warning(f"Scheduler: could not persist '{job.name}': {e}")
 
     def set_notify(self, func: Callable):
         """Set notification function (e.g. send Telegram message to admin)."""
@@ -41,14 +62,24 @@ class Scheduler:
                 log.error(f"Scheduler notify error: {e}")
 
     def add_job(self, name: str, interval: int, func: Callable, enabled: bool = True):
-        """Register a scheduled job."""
+        """Register a scheduled job, restoring state from DB if available."""
         if interval <= 0:
             log.warning(f"Scheduler: ignoring '{name}' with invalid interval={interval}")
             return
-        self._jobs[name] = ScheduledJob(
+        job = ScheduledJob(
             name=name, interval=interval, func=func, enabled=enabled,
-            last_run=time.time(),  # respect interval on first run
+            last_run=time.time(),  # default: respect interval on first run
         )
+        # Restore persisted state
+        saved = self._saved_states.get(name)
+        if saved:
+            job.last_run = saved.get("last_run", job.last_run)
+            job.run_count = saved.get("run_count", 0)
+            job.last_error = saved.get("last_error", "")
+            if not saved.get("enabled", True):
+                job.enabled = False
+            log.info(f"Scheduler: restored '{name}' (runs={job.run_count})")
+        self._jobs[name] = job
         log.info(f"Scheduler: registered '{name}' (every {interval}s)")
 
     def remove_job(self, name: str):
@@ -86,6 +117,7 @@ class Scheduler:
                             job.last_error = str(e)[:200]
                             log.error(f"Scheduler job '{job.name}' failed: {e}")
                         job.last_run = now
+                        self._persist_job(job)
             except Exception as e:
                 log.error(f"Scheduler loop error: {e}")
             await asyncio.sleep(10)

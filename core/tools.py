@@ -437,11 +437,15 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
 
     elif name == "save_memory":
         from core.database import get_db
+        from core.memory_guard import scan_memory
         db = get_db()
         content = arguments.get("content", "")
         category = arguments.get("category", "general")
         if not content:
             return ToolResult(name="save_memory", output="Error: content kosong", success=False)
+        is_safe, reason = scan_memory(content)
+        if not is_safe:
+            return ToolResult(name="save_memory", output=f"Memory ditolak: {reason}", success=False)
         user_id = arguments.get("_user_id", "unknown")
         agent_id = arguments.get("_agent_id", "")
         mem_id = db.save_memory(user_id, content, category, agent_id)

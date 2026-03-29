@@ -1273,7 +1273,16 @@ class TelegramBot:
         sent_msg = await update.message.reply_text("Processing...")
         chat_id = str(update.effective_chat.id)
         messages = session.get_messages()
-        max_iterations = 10
+        agent_cfg = self.config.get_agent(agent_id)
+        max_iterations = agent_cfg.max_iterations if agent_cfg else 15
+
+        # Compress context if approaching limit
+        from core.context_compressor import compress_context
+        max_ctx = agent_cfg.max_context_tokens if agent_cfg else 100000
+        messages = await compress_context(
+            self.config, provider_name, model, messages,
+            max_tokens=max_ctx,
+        )
 
         try:
             for iteration in range(max_iterations):
@@ -1323,9 +1332,22 @@ class TelegramBot:
 
                 # --- Tool calls detected — execute them ---
 
-                # Build status message
-                tool_names = [tc.name for tc in response.tool_calls]
-                status = f"Executing: {', '.join(tool_names)}..."
+                # Build progress status message
+                _TOOL_EMOJI = {
+                    "delegate_task": "\U0001f4e4", "check_balances": "\U0001f4b0",
+                    "generate_image": "\U0001f3a8", "generate_video": "\U0001f3ac",
+                    "generate_audio": "\U0001f3b5", "web_search": "\U0001f50d",
+                    "run_bash": "\U0001f4bb", "save_memory": "\U0001f4be",
+                    "recall_memories": "\U0001f9e0", "weather": "\u2600\ufe0f",
+                    "send_file": "\U0001f4ce",
+                }
+                default_emoji = "\u2699\ufe0f"
+                tool_labels = [
+                    f"{_TOOL_EMOJI.get(tc.name, default_emoji)} {tc.name}"
+                    for tc in response.tool_calls
+                ]
+                budget_info = f"[{iteration + 1}/{max_iterations}]"
+                status = f"{budget_info} {', '.join(tool_labels)}..."
                 try:
                     await sent_msg.edit_text(status)
                 except Exception:
@@ -1351,7 +1373,7 @@ class TelegramBot:
                         args = {}
 
                     if tc.name == "delegate_task":
-                        # Delegation to another agent
+                        # Delegation to another agent (shared budget)
                         target_id = args.get("agent_id", "")
                         task_desc = args.get("task", "")
                         target_agent = self.config.get_agent(target_id)
@@ -1364,10 +1386,14 @@ class TelegramBot:
                         except Exception:
                             pass
 
-                        result_text = await self.manager.delegate(
+                        remaining = max_iterations - iteration - 1
+                        result_text, child_used = await self.manager.delegate(
                             agent_id, target_id, user_id, task_desc,
                             chat_id=chat_id,
+                            remaining_budget=remaining,
                         )
+                        # Deduct child iterations from parent budget
+                        iteration += child_used
                         messages.append(Message(
                             role="tool", content=result_text,
                             tool_call_id=tc.id, name=tc.name,
@@ -1435,8 +1461,14 @@ class TelegramBot:
         await update.message.chat.send_action(ChatAction.TYPING)
         start_time = time.monotonic()
 
-        # If resuming, prepend partial response context
-        task_messages = session.get_messages()
+        # Compress context if approaching limit, then build task messages
+        from core.context_compressor import compress_context
+        agent_cfg = self.config.get_agent(agent_id)
+        max_ctx = agent_cfg.max_context_tokens if agent_cfg else 100000
+        task_messages = await compress_context(
+            self.config, provider_name, model, session.get_messages(),
+            max_tokens=max_ctx,
+        )
         if resume_from and resume_from.partial_response:
             task_messages = task_messages + [
                 Message(role="assistant", content=resume_from.partial_response),

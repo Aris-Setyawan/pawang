@@ -84,6 +84,14 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
             CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(user_id, category);
 
+            CREATE TABLE IF NOT EXISTS scheduler_state (
+                job_name TEXT PRIMARY KEY,
+                last_run REAL DEFAULT 0,
+                run_count INTEGER DEFAULT 0,
+                last_error TEXT DEFAULT '',
+                enabled INTEGER DEFAULT 1
+            );
+
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id TEXT PRIMARY KEY,
                 agent_id TEXT DEFAULT '',
@@ -285,6 +293,27 @@ class Database:
         """Get all user settings for bulk restore."""
         rows = self.conn.execute("SELECT * FROM user_settings").fetchall()
         return [dict(r) for r in rows]
+
+    # --- Scheduler State ---
+
+    def save_job_state(self, job_name: str, last_run: float, run_count: int,
+                       last_error: str = "", enabled: bool = True):
+        """Persist scheduler job state."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO scheduler_state (job_name, last_run, run_count, last_error, enabled) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(job_name) DO UPDATE SET "
+                "last_run = ?, run_count = ?, last_error = ?, enabled = ?",
+                (job_name, last_run, run_count, last_error, int(enabled),
+                 last_run, run_count, last_error, int(enabled)),
+            )
+            self.conn.commit()
+
+    def get_job_states(self) -> dict[str, dict]:
+        """Get all persisted job states."""
+        rows = self.conn.execute("SELECT * FROM scheduler_state").fetchall()
+        return {r["job_name"]: dict(r) for r in rows}
 
     def close(self):
         self.conn.close()

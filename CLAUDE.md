@@ -40,16 +40,16 @@ nohup python3 /root/openclaw/pawang/main.py > /tmp/pawang.log 2>&1 &
 ```
 
 ## Current Status
-- Phase 1 & 2 complete
+- Phase 1–4 complete
 - All agents on Qwen/ModelStudio (OpenRouter habis, DeepSeek reserved for OpenClaw)
 - Telegram bot token: 8736732111 (separate from OpenClaw's 8746504916)
 
-## Phase 3 TODO
-- Systemd service (auto-start after reboot)
-- Agent memory (save facts across sessions)
-- Cron/scheduler (balance alerts, health checks)
-- Voice message support
-- Inline keyboard (model/agent switching from Telegram)
+## Completed Phases
+- **Phase 1**: Core gateway, provider adapters, agent manager, tool system
+- **Phase 2**: Telegram bot, streaming, delegation, health monitor, admin panel
+- **Phase 3**: Systemd service, agent memory, scheduler, voice messages, inline keyboard, settings UI
+- **Phase 4**: Iteration budget, memory injection scanning, context compression, persistent scheduler, tool progress feedback
+- **Audit**: 23 fixes (4 critical, 8 high, 4 medium, 7 low)
 
 ## Important Notes
 - Pawang runs alongside OpenClaw — different bot token, different port, no conflict

@@ -56,6 +56,7 @@ class AgentConfig:
     channels: list[str] = field(default_factory=list)
     max_context_tokens: int = 100000
     temperature: float = 0.7
+    max_iterations: int = 15  # tool loop iteration budget
 
 
 @dataclass

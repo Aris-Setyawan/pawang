@@ -187,11 +187,14 @@ class AgentManager:
 
     async def delegate(self, from_agent_id: str, to_agent_id: str,
                        user_id: str, task: str,
-                       chat_id: str = "") -> str:
+                       chat_id: str = "",
+                       remaining_budget: int = 0) -> tuple[str, int]:
         """Delegate a task from one agent to another.
 
         Runs a tool execution loop so the target agent can use its tools
         (generate_image, run_bash, etc.) before responding.
+
+        Returns (response_text, iterations_used) for shared budget tracking.
         """
         import json
         from core import completion
@@ -199,7 +202,7 @@ class AgentManager:
 
         target_agent = self.config.get_agent(to_agent_id)
         if not target_agent:
-            return f"[Error: Agent '{to_agent_id}' not found]"
+            return f"[Error: Agent '{to_agent_id}' not found]", 0
 
         # Build system prompt from agent's prompt file
         system_content = (
@@ -222,10 +225,13 @@ class AgentManager:
         ]
 
         tools = get_agent_tools(to_agent_id)
-        max_iterations = 10
+        # Child gets min of its own budget or remaining parent budget
+        child_budget = target_agent.max_iterations
+        if remaining_budget > 0:
+            child_budget = min(child_budget, remaining_budget)
 
         try:
-            for i in range(max_iterations):
+            for i in range(child_budget):
                 response = await completion.complete(
                     config=self.config,
                     provider_name=target_agent.provider,
@@ -240,7 +246,7 @@ class AgentManager:
                     # No tools called — final text response
                     log.info(f"Delegation: {from_agent_id} -> {to_agent_id} OK "
                              f"({i + 1} iterations)")
-                    return response.text
+                    return response.text, i + 1
 
                 # Add assistant message with tool_calls
                 raw_tc = [
@@ -267,8 +273,8 @@ class AgentManager:
                         tool_call_id=tc.id, name=tc.name,
                     ))
 
-            return "[Error: too many tool iterations in delegation]"
+            return f"[Error: too many tool iterations in delegation (budget={child_budget})]", child_budget
 
         except Exception as e:
             log.error(f"Delegation failed: {from_agent_id} -> {to_agent_id}: {e}")
-            return f"[Delegation error: {e}]"
+            return f"[Delegation error: {e}]", 0
