@@ -1376,27 +1376,42 @@ class TelegramBot:
     # --- Rename Agent ---
 
     async def _cmd_rename(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Rename the current agent: /rename <nama_baru>"""
+        """Rename agent: /rename <nama> or /rename <agent_id> <nama>"""
         if not self._is_allowed(update.effective_user.id):
             return
         args = context.args
         if not args:
-            await update.message.reply_text(
-                "Usage: /rename <nama_baru>\n"
-                "Contoh: /rename Wulan"
-            )
+            # Show current agent names
+            lines = ["Usage:\n"
+                      "  /rename <nama> — rename agent aktif\n"
+                      "  /rename <agent_id> <nama> — rename agent tertentu\n\n"
+                      "Agent saat ini:"]
+            for a in self.config.agents:
+                lines.append(f"  {a.id} — {a.name}")
+            await update.message.reply_text("\n".join(lines))
             return
 
-        new_name = " ".join(args).strip()
+        user_id = str(update.effective_user.id)
+
+        # Check if first arg is an agent_id
+        target_id = None
+        if args[0].startswith("agent") and self.config.get_agent(args[0]):
+            target_id = args[0]
+            new_name = " ".join(args[1:]).strip()
+        else:
+            target_id = self._get_agent_id(update.effective_user.id)
+            new_name = " ".join(args).strip()
+
+        if not new_name:
+            await update.message.reply_text("Nama baru belum diisi.")
+            return
         if len(new_name) > 50:
             await update.message.reply_text("Nama terlalu panjang (maks 50 karakter).")
             return
 
-        user_id = str(update.effective_user.id)
-        agent_id = self._get_agent_id(update.effective_user.id)
-        agent = self.config.get_agent(agent_id)
+        agent = self.config.get_agent(target_id)
         if not agent:
-            await update.message.reply_text("Agent tidak ditemukan.")
+            await update.message.reply_text(f"Agent '{target_id}' tidak ditemukan.")
             return
 
         old_name = agent.name
@@ -1404,7 +1419,7 @@ class TelegramBot:
 
         # Refresh system prompt in active session so agent knows its new name
         if self.manager:
-            self.manager.refresh_system_prompt(agent_id, user_id)
+            self.manager.refresh_system_prompt(target_id, user_id)
 
         # Persist to config.yaml
         from core.config import save_config
@@ -1413,9 +1428,9 @@ class TelegramBot:
         except Exception as e:
             log.error(f"Failed to persist rename to config.yaml: {e}")
 
-        log.info(f"Agent {agent_id} renamed: {old_name} -> {new_name} (by user {user_id})")
+        log.info(f"Agent {target_id} renamed: {old_name} -> {new_name} (by user {user_id})")
         await update.message.reply_text(
-            f"Agent {agent_id} renamed: {old_name} -> **{new_name}**",
+            f"**{target_id}** renamed: {old_name} -> **{new_name}**",
             parse_mode="Markdown",
         )
 
