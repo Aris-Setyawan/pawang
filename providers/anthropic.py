@@ -26,6 +26,39 @@ class AnthropicProvider(BaseProvider):
             headers["x-api-key"] = self.api_key
         return headers
 
+    def _apply_prompt_caching(self, body: dict) -> dict:
+        """Apply cache_control markers to reduce input token costs.
+
+        Strategy: system_and_3 — cache system prompt + last 3 messages.
+        Reduces repeat context by ~75% on multi-turn conversations.
+        """
+        marker = {"type": "ephemeral"}
+
+        # Cache system prompt
+        if "system" in body and body["system"]:
+            body["system"] = [
+                {"type": "text", "text": body["system"], "cache_control": marker}
+            ]
+
+        # Cache last 3 non-empty messages
+        msgs = body.get("messages", [])
+        cached = 0
+        for msg in reversed(msgs):
+            if cached >= 3:
+                break
+            content = msg.get("content", "")
+            if not content:
+                continue
+            if isinstance(content, str):
+                msg["content"] = [
+                    {"type": "text", "text": content, "cache_control": marker}
+                ]
+            elif isinstance(content, list) and content:
+                content[-1]["cache_control"] = marker
+            cached += 1
+
+        return body
+
     def _build_body(self, request: CompletionRequest) -> dict:
         # Anthropic separates system from messages
         system_text = ""
@@ -45,6 +78,9 @@ class AnthropicProvider(BaseProvider):
         }
         if system_text:
             body["system"] = system_text
+
+        # Apply prompt caching for cost reduction
+        body = self._apply_prompt_caching(body)
         return body
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:

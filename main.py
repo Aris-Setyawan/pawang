@@ -15,6 +15,7 @@ import uvicorn
 from core.config import get_config, reload_config
 from core.database import get_db
 from core.logger import log, setup_logger
+from core.hooks import hooks
 from agents.manager import AgentManager
 from channels.telegram import TelegramBot
 from core.health import HealthMonitor
@@ -149,11 +150,14 @@ async def startup():
     log.info(f"Scheduler started ({len(scheduler.get_jobs())} jobs)")
 
     log.info(f"Pawang ready on port {config.gateway.port}")
+    await hooks.emit("startup", providers=list(config.providers.keys()),
+                      agents=[a.id for a in config.agents])
 
 
 async def shutdown():
     global telegram_bot, health_monitor, scheduler
     log.info("Pawang shutting down...")
+    await hooks.emit("shutdown")
     if scheduler:
         scheduler.stop()
     if health_monitor:

@@ -106,6 +106,8 @@ class PawangConfig:
     health: HealthConfig
     panel: PanelConfig
     scheduler: SchedulerConfig
+    smart_routing: dict = None  # {enabled, cheap_provider, cheap_model}
+    session_timeout: int = 14400  # idle timeout in seconds (default 4h)
 
     def get_provider(self, name: str) -> Optional[ProviderConfig]:
         return self.providers.get(name)
@@ -161,6 +163,9 @@ def load_config(path: Path = CONFIG_PATH) -> PawangConfig:
     scheduler_raw = raw.get("scheduler", {})
     scheduler = SchedulerConfig(**scheduler_raw)
 
+    smart_routing = raw.get("smart_routing", None)
+    session_timeout = raw.get("session_timeout", 14400)
+
     return PawangConfig(
         gateway=gateway,
         providers=providers,
@@ -169,6 +174,8 @@ def load_config(path: Path = CONFIG_PATH) -> PawangConfig:
         health=health,
         panel=panel,
         scheduler=scheduler,
+        smart_routing=smart_routing,
+        session_timeout=session_timeout,
     )
 
 

@@ -1,5 +1,6 @@
 """Agent Manager — manages agent sessions, conversation history, and delegation."""
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -18,6 +19,7 @@ class Session:
     messages: list[Message] = field(default_factory=list)
     active_model: Optional[str] = None
     active_provider: Optional[str] = None
+    last_active: float = field(default_factory=time.time)
 
     @property
     def key(self) -> str:
@@ -54,12 +56,18 @@ class AgentManager:
 
     def _build_system_prompt(self, agent: 'AgentConfig', user_id: str,
                              platform: str = "telegram") -> str:
-        """Build system prompt with platform hints and user memories."""
+        """Build system prompt with SOUL.md, platform hints, and user memories."""
         prompt_text = ""
         if agent.system_prompt_file:
             prompt_path = Path(__file__).parent.parent / agent.system_prompt_file
             if prompt_path.exists():
                 prompt_text = prompt_path.read_text().strip()
+
+        # Load SOUL.md personality (per-agent identity)
+        soul_path = Path(__file__).parent.parent / "prompts" / f"SOUL_{agent.id}.md"
+        if soul_path.exists():
+            soul = soul_path.read_text().strip()
+            prompt_text = soul + "\n\n" + prompt_text if prompt_text else soul
 
         # Platform formatting hints
         platform_hints = {
@@ -109,8 +117,20 @@ class AgentManager:
         return prompt_text
 
     def get_session(self, agent_id: str, user_id: str) -> Session:
-        """Get or create a session, restoring from DB if available."""
+        """Get or create a session, restoring from DB if available.
+
+        Auto-resets idle sessions based on config.session_timeout.
+        """
         key = self._session_key(agent_id, user_id)
+
+        # Auto-reset idle sessions
+        if key in self._sessions:
+            session = self._sessions[key]
+            timeout = getattr(self.config, 'session_timeout', 14400)
+            if time.time() - session.last_active > timeout:
+                log.info(f"Session auto-reset (idle {timeout}s): {key}")
+                del self._sessions[key]
+
         if key not in self._sessions:
             session = Session(agent_id=agent_id, user_id=user_id)
 
@@ -155,11 +175,15 @@ class AgentManager:
 
     def save_message(self, session: Session, role: str, content: str,
                      model: str = "", provider: str = ""):
-        """Add message to session AND persist to DB."""
+        """Add message to session AND persist to DB + daily log."""
         session.add_message(role, content)
+        session.last_active = time.time()
         db = get_db()
         db.save_message(session.key, session.agent_id, session.user_id,
                         role, content, model, provider)
+        # Daily memory log (audit trail)
+        from core.daily_log import append_daily_log
+        append_daily_log(session.agent_id, session.user_id, role, content)
 
     def get_agent_model(self, session: Session) -> tuple[str, str]:
         agent = self.config.get_agent(session.agent_id)

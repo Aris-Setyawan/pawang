@@ -18,6 +18,8 @@ from core.logger import log
 from core.tasks import TaskManager, TaskState
 from core.rate_limit import RateLimiter
 from core.intent import classify_intent
+from core.pairing import PairingManager
+from core.hooks import hooks
 from core import completion
 from agents.manager import AgentManager
 from providers.base import Message, ThinkingConfig
@@ -38,6 +40,7 @@ class TelegramBot:
         self.tasks = TaskManager()
         self.skill_manager = SkillManager()
         self.rate_limiter = RateLimiter(max_requests=20, window_seconds=60)
+        self.pairing = PairingManager()
         self.app: Optional[Application] = None
         self._user_agent: dict[int, str] = {}
         self._waiting_key: dict[int, str] = {}
@@ -81,7 +84,10 @@ class TelegramBot:
     def _is_allowed(self, user_id: int) -> bool:
         if not self.config.telegram.allowed_users:
             return True
-        return user_id in self.config.telegram.allowed_users
+        if user_id in self.config.telegram.allowed_users:
+            return True
+        # Check DM pairing
+        return self.pairing.is_approved(user_id)
 
     # --- Provider Status ---
 
@@ -488,7 +494,10 @@ class TelegramBot:
             "/status - Status saat ini\n"
             "/usage - Statistik penggunaan\n"
             "/settings - Pengaturan (thinking, voice, dll)\n"
-            "/memory - Lihat/kelola memory tersimpan"
+            "/memory - Lihat/kelola memory tersimpan\n"
+            "/search - Cari di riwayat percakapan\n"
+            "/insights - Statistik & analytics\n"
+            "/pair - Pairing kode untuk akses bot"
         )
 
     def _build_provider_mgmt_keyboard(self) -> InlineKeyboardMarkup:
@@ -866,12 +875,126 @@ class TelegramBot:
             text = text[:4093] + "..."
         await update.message.reply_text(text)
 
+    async def _cmd_pair(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """DM pairing — generate or redeem a pairing code.
+        Admin: /pair generate
+        User:  /pair <CODE>
+        """
+        uid = update.effective_user.id
+        args = context.args
+
+        if not args:
+            await update.message.reply_text(
+                "Usage:\n"
+                "/pair generate — (admin) buat kode pairing\n"
+                "/pair <CODE> — redeem kode untuk akses bot"
+            )
+            return
+
+        action = args[0].lower()
+
+        if action == "generate":
+            # Only admins can generate codes
+            admin_id = self.config.telegram.admin_chat_id
+            if admin_id and str(uid) != str(admin_id):
+                # Also allow users in allowed_users list
+                if uid not in self.config.telegram.allowed_users:
+                    await update.message.reply_text("Hanya admin yang bisa generate kode.")
+                    return
+            code = self.pairing.generate_code(admin_id=str(uid))
+            pending = self.pairing.list_pending()
+            await update.message.reply_text(
+                f"Pairing code: `{code}`\n"
+                f"Expires: 1 jam\n"
+                f"Pending codes: {len(pending)}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        # Try to redeem code
+        code = args[0].strip().upper()
+        if self._is_allowed(uid):
+            await update.message.reply_text("Kamu sudah punya akses.")
+            return
+
+        success = self.pairing.try_pair(uid, code)
+        if success:
+            await update.message.reply_text(
+                "Pairing berhasil! Kamu sekarang punya akses ke bot."
+            )
+        else:
+            await update.message.reply_text(
+                "Kode invalid atau expired. Coba lagi."
+            )
+
+    async def _cmd_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Search conversation history using FTS5.
+        /search <query>
+        """
+        if not self._is_allowed(update.effective_user.id):
+            return
+        args = context.args
+        if not args:
+            await update.message.reply_text("Usage: /search <kata kunci>")
+            return
+
+        query = " ".join(args)
+        user_id = str(update.effective_user.id)
+        db = get_db()
+        results = db.search_sessions(user_id, query, limit=10)
+
+        if not results:
+            await update.message.reply_text(f"Tidak ditemukan hasil untuk \"{query}\".")
+            return
+
+        lines = [f"Search: \"{query}\" — {len(results)} hasil\n"]
+        for r in results:
+            snippet = r.get("snippet", "")
+            role = r.get("role", "?")
+            agent = r.get("agent_id", "")
+            lines.append(f"[{role}] ({agent}) {snippet}")
+
+        text = "\n".join(lines)
+        if len(text) > 4096:
+            text = text[:4093] + "..."
+        await update.message.reply_text(text)
+
+    async def _cmd_insights(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show usage insights and analytics.
+        /insights [hours]
+        """
+        if not self._is_allowed(update.effective_user.id):
+            return
+
+        # Only admin can see insights
+        uid = update.effective_user.id
+        admin_id = self.config.telegram.admin_chat_id
+        if admin_id and str(uid) != str(admin_id):
+            if uid not in self.config.telegram.allowed_users:
+                await update.message.reply_text("Hanya admin yang bisa lihat insights.")
+                return
+
+        args = context.args
+        hours = 168  # default 7 days
+        if args:
+            try:
+                hours = int(args[0])
+            except ValueError:
+                pass
+
+        from core.insights import generate_insights
+        report = generate_insights(hours)
+        if len(report) > 4096:
+            report = report[:4093] + "..."
+        await update.message.reply_text(report)
+
     async def _cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_allowed(update.effective_user.id):
             return
         user_id = str(update.effective_user.id)
         agent_id = self._get_agent_id(update.effective_user.id)
         self.manager.clear_session(agent_id, user_id)
+        await hooks.emit("session:reset", user_id=user_id, agent_id=agent_id)
         await update.message.reply_text("Conversation cleared.")
 
     async def _cmd_export(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1362,6 +1485,8 @@ class TelegramBot:
                     self.tasks.complete_task(user_id, final_text)
                     self.manager.save_message(session, "assistant", final_text,
                                               model=model, provider=provider_name)
+                    await hooks.emit("message:sent", user_id=user_id, agent_id=agent_id,
+                                     text=final_text[:200])
                     self._record_health(provider_name, True)
 
                     # Voice reply if enabled
@@ -1414,6 +1539,8 @@ class TelegramBot:
                 # Execute each tool
                 for tc in response.tool_calls:
                     log.info(f"Tool exec: {tc.name} (agent={agent_id})")
+                    await hooks.emit("tool:called", tool=tc.name, agent_id=agent_id,
+                                     user_id=user_id)
                     try:
                         args = json.loads(tc.arguments)
                     except json.JSONDecodeError:
@@ -1464,6 +1591,7 @@ class TelegramBot:
             log.error(f"Tool loop error: {e}")
             self.tasks.fail_task(user_id, str(e))
             self._record_health(provider_name, False, str(e))
+            await hooks.emit("error", error=str(e), agent_id=agent_id, user_id=user_id)
 
             latency = (time.monotonic() - start_time) * 1000
             db = get_db()
@@ -1497,10 +1625,18 @@ class TelegramBot:
         session = self.manager.get_session(agent_id, user_id)
         provider_name, model = self.manager.get_agent_model(session)
 
+        # Smart routing: simple messages → cheap model
+        from core.smart_routing import route_message
         prompt = update.message.text
+        provider_name, model, was_routed = route_message(
+            self.config, prompt, provider_name, model,
+        )
+
         if not resume_from:
             self.manager.save_message(session, "user", prompt,
                                       model=model, provider=provider_name)
+            await hooks.emit("message:received", user_id=user_id, agent_id=agent_id,
+                             text=prompt, routed=was_routed)
 
         # Check if agent has tools — use tool loop instead of streaming
         from core.tools import get_agent_tools
@@ -1612,6 +1748,8 @@ class TelegramBot:
             if not task.should_cancel:
                 self.manager.save_message(session, "assistant", full_text,
                                           model=model, provider=provider_name)
+                await hooks.emit("message:sent", user_id=user_id, agent_id=agent_id,
+                                 text=full_text[:200])
 
                 # Voice reply if enabled
                 uid_int = update.effective_user.id
@@ -1630,6 +1768,7 @@ class TelegramBot:
             log.error(f"Task error: {e}")
             self.tasks.fail_task(user_id, str(e))
             self._record_health(provider_name, False, str(e))
+            await hooks.emit("error", error=str(e), agent_id=agent_id, user_id=user_id)
 
             latency = (time.monotonic() - start_time) * 1000
             db = get_db()
@@ -1743,6 +1882,9 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("settings", self._cmd_settings))
         self.app.add_handler(CommandHandler("memory", self._cmd_memory))
         self.app.add_handler(CommandHandler("export", self._cmd_export))
+        self.app.add_handler(CommandHandler("search", self._cmd_search))
+        self.app.add_handler(CommandHandler("pair", self._cmd_pair))
+        self.app.add_handler(CommandHandler("insights", self._cmd_insights))
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
@@ -1766,6 +1908,9 @@ class TelegramBot:
             BotCommand("settings", "Pengaturan bot"),
             BotCommand("memory", "Lihat/kelola memory"),
             BotCommand("export", "Export riwayat percakapan"),
+            BotCommand("search", "Cari di riwayat percakapan"),
+            BotCommand("pair", "Pairing kode untuk akses bot"),
+            BotCommand("insights", "Statistik & analytics"),
         ])
 
         log.info("Telegram bot configured")

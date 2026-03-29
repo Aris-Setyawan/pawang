@@ -50,6 +50,7 @@ nohup python3 /root/openclaw/pawang/main.py > /tmp/pawang.log 2>&1 &
 - **Phase 3**: Systemd service, agent memory, scheduler, voice messages, inline keyboard, settings UI
 - **Phase 4**: Iteration budget, memory injection scanning, context compression, persistent scheduler, tool progress feedback
 - **Phase 5**: Subagent isolation, platform formatting hints, dual memory, rate limiting, /export command
+- **Phase 6**: Smart routing, Anthropic prompt caching, enhanced command approval, FTS5 search, session auto-reset, event hooks, insights engine, DM pairing, SOUL.md per agent, daily memory logs
 - **Audit**: 23 fixes (4 critical, 8 high, 4 medium, 7 low)
 
 ## Important Notes

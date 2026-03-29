@@ -102,8 +102,35 @@ class Database:
             );
         """)
         self.conn.commit()
+        self._setup_fts()
         self._migrate()
         log.info(f"Database initialized: {self.path}")
+
+    def _setup_fts(self):
+        """Create FTS5 virtual table for full-text search on messages."""
+        try:
+            self.conn.executescript("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                    content, session_key, user_id, agent_id,
+                    content_rowid='id',
+                    tokenize='unicode61'
+                );
+
+                CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages
+                BEGIN
+                    INSERT INTO messages_fts(rowid, content, session_key, user_id, agent_id)
+                    VALUES (NEW.id, NEW.content, NEW.session_key, NEW.user_id, NEW.agent_id);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages
+                BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content, session_key, user_id, agent_id)
+                    VALUES ('delete', OLD.id, OLD.content, OLD.session_key, OLD.user_id, OLD.agent_id);
+                END;
+            """)
+            self.conn.commit()
+        except Exception as e:
+            log.warning(f"FTS5 setup skipped (may not be available): {e}")
 
     def _migrate(self):
         """Run schema migrations for existing databases."""
@@ -268,6 +295,45 @@ class Database:
             )
             self.conn.commit()
             return cur.rowcount > 0
+
+    def search_sessions(self, user_id: str, query: str, limit: int = 20) -> list[dict]:
+        """Full-text search across message history using FTS5.
+
+        Returns matching messages with snippet highlights.
+        Falls back to LIKE if FTS5 is not available.
+        """
+        if not query or len(query) > 200:
+            return []
+        try:
+            rows = self.conn.execute(
+                "SELECT m.id, m.session_key, m.agent_id, m.role, m.created_at, "
+                "snippet(messages_fts, 0, '**', '**', '...', 40) as snippet "
+                "FROM messages_fts "
+                "JOIN messages m ON m.id = messages_fts.rowid "
+                "WHERE messages_fts MATCH ? AND m.user_id = ? "
+                "ORDER BY rank LIMIT ?",
+                (query, user_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            # Fallback to LIKE search
+            rows = self.conn.execute(
+                "SELECT id, session_key, agent_id, role, content, created_at "
+                "FROM messages WHERE user_id = ? AND content LIKE ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (user_id, f"%{query}%", limit),
+            ).fetchall()
+            results = []
+            for r in rows:
+                d = dict(r)
+                # Create manual snippet
+                content = d.pop("content", "")
+                idx = content.lower().find(query.lower())
+                start = max(0, idx - 40)
+                end = min(len(content), idx + len(query) + 40)
+                d["snippet"] = ("..." if start > 0 else "") + content[start:end] + ("..." if end < len(content) else "")
+                results.append(d)
+            return results
 
     def search_memories(self, user_id: str, query: str, limit: int = 20) -> list[dict]:
         """Search memories by keyword (simple LIKE match)."""

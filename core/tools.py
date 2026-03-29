@@ -352,25 +352,66 @@ async def _run_script(script_name: str, args: list[str], timeout: int = 120) -> 
         return ToolResult(name=script_name, output=str(e), success=False)
 
 
+import re as _re
+import unicodedata as _ud
+
+# Regex-based dangerous command patterns (from Hermes approval.py)
+_DANGEROUS_PATTERNS = [
+    (_re.compile(r'\brm\s+(-[^\s]*\s+)*/'), "recursive delete in root"),
+    (_re.compile(r'\brm\s+-[^\s]*r'), "recursive delete"),
+    (_re.compile(r'\bchmod\s+(-[^\s]*\s+)*777\b'), "world-writable permissions"),
+    (_re.compile(r'\bdd\s+.*if='), "disk copy"),
+    (_re.compile(r'>\s*/dev/sd'), "write to block device"),
+    (_re.compile(r'\bDROP\s+(TABLE|DATABASE)\b', _re.I), "SQL DROP"),
+    (_re.compile(r'\bDELETE\s+FROM\b(?!.*\bWHERE\b)', _re.I), "SQL DELETE without WHERE"),
+    (_re.compile(r'\b(curl|wget)\b.*\|\s*(ba)?sh\b'), "pipe remote content to shell"),
+    (_re.compile(r'\b(python[23]?|perl|ruby|node)\s+-[ec]\s+'), "script exec via -e/-c"),
+    (_re.compile(r'\bsystemctl\s+(stop|disable|mask)\b'), "stop system service"),
+    (_re.compile(r'\bkill\s+-9\s+-1\b'), "kill all processes"),
+    (_re.compile(r':\(\)\s*\{'), "fork bomb"),
+    (_re.compile(r'\bmkfs\b'), "format filesystem"),
+    (_re.compile(r'\b(shutdown|reboot|poweroff|halt|init\s+[06])\b'), "system shutdown/reboot"),
+]
+
+# Sensitive file patterns
+_SENSITIVE_FILES = ["/etc/shadow", "/etc/gshadow", ".env", "credentials", "id_rsa", ".ssh/"]
+
+
+def _normalize_command(command: str) -> str:
+    """Anti-obfuscation: normalize unicode, strip ANSI, collapse whitespace."""
+    # Strip ANSI escape sequences
+    cmd = _re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', command)
+    cmd = _re.sub(r'\x1b\][^\x07]*\x07', '', cmd)
+    # Strip null bytes
+    cmd = cmd.replace('\x00', '')
+    # Unicode NFKC normalization (fullwidth chars -> ASCII)
+    cmd = _ud.normalize('NFKC', cmd)
+    # Collapse whitespace
+    cmd = _re.sub(r'\s+', ' ', cmd.strip())
+    return cmd
+
+
+def _detect_dangerous(command: str) -> tuple[bool, str]:
+    """Check command against dangerous patterns. Returns (is_dangerous, reason)."""
+    normalized = _normalize_command(command)
+    for pattern, desc in _DANGEROUS_PATTERNS:
+        if pattern.search(normalized):
+            log.warning(f"Dangerous command blocked: {desc} in: {command[:100]}")
+            return True, desc
+
+    # Sensitive file access
+    for s in _SENSITIVE_FILES:
+        if s in normalized and _re.search(r'\b(cat|head|tail|cp|scp|mv|less|more)\b', normalized):
+            return True, f"access to sensitive file ({s})"
+
+    return False, ""
+
+
 async def _run_bash(command: str, timeout: int = 30) -> ToolResult:
     """Run an arbitrary bash command."""
-    import re
-    # Safety: block dangerous commands
-    dangerous = [
-        "rm -rf /", "rm -rf /*", "mkfs", "dd if=", "> /dev/sd",
-        ":(){ :|:& };:", "chmod -R 777 /", "chown -R", "shutdown",
-        "reboot", "init 0", "init 6", "halt", "poweroff",
-    ]
-    # Normalize whitespace for bypass prevention
-    cmd_normalized = re.sub(r'\s+', ' ', command.strip())
-    for d in dangerous:
-        if d in cmd_normalized:
-            return ToolResult(name="bash", output="Blocked: dangerous command", success=False)
-    # Block attempts to read sensitive files
-    sensitive = ["/etc/shadow", "/etc/gshadow", ".env", "credentials", "id_rsa"]
-    for s in sensitive:
-        if s in command and ("cat " in command or "head " in command or "tail " in command or "cp " in command):
-            return ToolResult(name="bash", output="Blocked: access to sensitive file", success=False)
+    is_dangerous, reason = _detect_dangerous(command)
+    if is_dangerous:
+        return ToolResult(name="bash", output=f"Blocked: {reason}", success=False)
 
     try:
         proc = await asyncio.create_subprocess_shell(
