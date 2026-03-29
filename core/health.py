@@ -59,7 +59,10 @@ class HealthMonitor:
         if not prov or not prov.api_key:
             return False
 
-        status = self._status[provider_name]
+        status = self._status.get(provider_name)
+        if not status:
+            status = ProviderStatus(name=provider_name)
+            self._status[provider_name] = status
         start = time.monotonic()
 
         try:

@@ -417,7 +417,10 @@ class TelegramBot:
             )
 
         elif data.startswith("memdel:"):
-            mem_id = int(data.split(":")[1])
+            try:
+                mem_id = int(data.split(":")[1])
+            except (IndexError, ValueError):
+                return
             uid_str = str(user_id)
             db = get_db()
             db.delete_memory(mem_id, uid_str)

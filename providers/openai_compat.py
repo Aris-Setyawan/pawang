@@ -115,7 +115,10 @@ class OpenAIProvider(BaseProvider):
             resp.raise_for_status()
             data = resp.json()
 
-        choice = data["choices"][0]
+        choices = data.get("choices", [])
+        if not choices:
+            return CompletionResponse(text="", model=request.model, finish_reason="error")
+        choice = choices[0]
         msg = choice.get("message", {})
 
         # Extract reasoning content (DeepSeek Reasoner)
@@ -138,10 +141,14 @@ class OpenAIProvider(BaseProvider):
         # Extract tool_calls
         tool_calls = []
         for tc in msg.get("tool_calls", []):
+            tc_id = tc.get("id", "")
+            func = tc.get("function", {})
+            if not tc_id or not func.get("name"):
+                continue
             tool_calls.append(ToolCall(
-                id=tc["id"],
-                name=tc["function"]["name"],
-                arguments=tc["function"]["arguments"],
+                id=tc_id,
+                name=func["name"],
+                arguments=func.get("arguments", "{}"),
             ))
 
         return CompletionResponse(
@@ -176,7 +183,10 @@ class OpenAIProvider(BaseProvider):
                     except json.JSONDecodeError:
                         continue
 
-                    choice = data["choices"][0]
+                    choices = data.get("choices", [])
+                    if not choices:
+                        continue
+                    choice = choices[0]
                     delta = choice.get("delta", {})
 
                     # Regular content

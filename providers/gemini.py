@@ -103,13 +103,12 @@ class GeminiProvider(BaseProvider):
 
         usage = data.get("usageMetadata", {})
 
+        candidates = data.get("candidates") or [{}]
         return CompletionResponse(
             text=text,
             thinking_text=thinking_text,
             model=request.model,
-            finish_reason=data.get("candidates", [{}])[0].get(
-                "finishReason", "STOP"
-            ),
+            finish_reason=candidates[0].get("finishReason", "STOP"),
             usage=usage,
         )
 

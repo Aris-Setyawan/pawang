@@ -389,6 +389,12 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
     elif name == "send_file":
         file_path = arguments.get("file_path", "")
         caption = arguments.get("caption", "")
+        # Path traversal protection: only allow files in workspace/scripts/tmp
+        from pathlib import Path
+        resolved = Path(file_path).resolve()
+        allowed_dirs = [Path("/root/pawang/workspace"), Path("/root/pawang/scripts"), Path("/tmp")]
+        if not any(str(resolved).startswith(str(d)) for d in allowed_dirs):
+            return ToolResult(name="send_file", output=f"Blocked: path not in allowed directory", success=False)
         return await _run_script("telegram-send.sh", [file_path, caption, chat_id])
 
     elif name == "run_bash":

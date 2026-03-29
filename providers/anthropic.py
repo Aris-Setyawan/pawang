@@ -62,8 +62,8 @@ class AnthropicProvider(BaseProvider):
 
         text = ""
         for block in data.get("content", []):
-            if block["type"] == "text":
-                text += block["text"]
+            if block.get("type") == "text":
+                text += block.get("text", "")
 
         return CompletionResponse(
             text=text,
