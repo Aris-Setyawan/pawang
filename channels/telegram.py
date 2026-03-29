@@ -1406,6 +1406,13 @@ class TelegramBot:
         if self.manager:
             self.manager.refresh_system_prompt(agent_id, user_id)
 
+        # Persist to config.yaml
+        from core.config import save_config
+        try:
+            save_config(self.config)
+        except Exception as e:
+            log.error(f"Failed to persist rename to config.yaml: {e}")
+
         log.info(f"Agent {agent_id} renamed: {old_name} -> {new_name} (by user {user_id})")
         await update.message.reply_text(
             f"Agent {agent_id} renamed: {old_name} -> **{new_name}**",

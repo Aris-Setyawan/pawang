@@ -193,3 +193,21 @@ def get_config() -> PawangConfig:
 def reload_config():
     global _config
     _config = load_config()
+
+
+def save_config(config: PawangConfig, path: Path = CONFIG_PATH):
+    """Write current runtime config back to config.yaml, preserving structure."""
+    raw = yaml.safe_load(path.read_text())
+
+    # Update agent names/models/providers/temps from runtime
+    raw_agents = raw.get("agents", [])
+    for ra in raw_agents:
+        agent = config.get_agent(ra.get("id", ""))
+        if agent:
+            ra["name"] = agent.name
+            ra["model"] = agent.model
+            ra["provider"] = agent.provider
+            ra["temperature"] = agent.temperature
+            ra["max_iterations"] = agent.max_iterations
+
+    path.write_text(yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False))
