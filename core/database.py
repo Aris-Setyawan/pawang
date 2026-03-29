@@ -100,6 +100,17 @@ class Database:
                 voice_reply INTEGER DEFAULT 0,
                 updated_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_key TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                label TEXT DEFAULT '',
+                messages_json TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_checkpoints_session
+                ON checkpoints(session_key, user_id);
         """)
         self.conn.commit()
         self._setup_fts()

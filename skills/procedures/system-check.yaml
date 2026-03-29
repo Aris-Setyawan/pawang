@@ -1,0 +1,17 @@
+---
+name: system-check
+description: Cek status sistem (disk, memory, proses Pawang)
+category: devops
+usage: /skill system-check
+timeout: 30
+steps:
+  - label: "Disk usage"
+    run: "df -h / /root"
+  - label: "Memory usage"
+    run: "free -h"
+  - label: "Pawang process"
+    run: "ps aux | grep 'python.*main.py' | grep -v grep || echo 'Pawang not running'"
+  - label: "Uptime"
+    run: "uptime"
+---
+Quick system health check for the Pawang server.

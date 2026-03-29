@@ -15,10 +15,21 @@ pawang/
 ├── config.yaml          # Agent/model/provider config
 ├── .env                 # API keys, bot token
 ├── agents/              # Agent manager, delegation
-├── channels/            # Telegram bot handler
+├── api/                 # OpenAI-compatible API server (/v1/chat/completions)
+├── channels/            # Telegram bot handler, webhook adapters
 ├── core/                # Provider adapters, tools, health monitor
+│   ├── approval.py      # Command approval DM flow
+│   ├── checkpoint.py    # Conversation checkpoint/rollback
+│   ├── file_tools.py    # File read/write/search tools
+│   ├── hooks.py         # Event hooks system
+│   ├── insights.py      # Usage analytics engine
+│   ├── mcp.py           # MCP server integration
+│   ├── moa.py           # Mixture of Agents (multi-model)
+│   ├── smart_routing.py # Smart model routing
+│   ├── user_profile.py  # Auto user profiling
+│   └── vision.py        # Image analysis (Gemini/GPT-4o)
 ├── providers/           # OpenAI-compat, Anthropic, Gemini adapters
-├── skills/              # Weather, web search, youtube
+├── skills/              # Weather, web search, youtube + YAML procedures
 ├── scripts/             # generate-image, check-balances, etc
 ├── panel/               # Admin web panel
 ├── prompts/             # System prompts per agent
@@ -51,6 +62,7 @@ nohup python3 /root/openclaw/pawang/main.py > /tmp/pawang.log 2>&1 &
 - **Phase 4**: Iteration budget, memory injection scanning, context compression, persistent scheduler, tool progress feedback
 - **Phase 5**: Subagent isolation, platform formatting hints, dual memory, rate limiting, /export command
 - **Phase 6**: Smart routing, Anthropic prompt caching, enhanced command approval, FTS5 search, session auto-reset, event hooks, insights engine, DM pairing, SOUL.md per agent, daily memory logs
+- **Phase 7**: Vision analysis, OpenAI-compatible API server, MCP integration, Mixture of Agents, extended file/web tools, command approval DM flow, checkpoint/rollback, webhook adapters, user profiling, YAML skill loader
 - **Audit**: 23 fixes (4 critical, 8 high, 4 medium, 7 low)
 
 ## Important Notes

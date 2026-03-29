@@ -16,12 +16,16 @@ from core.config import get_config, reload_config
 from core.database import get_db
 from core.logger import log, setup_logger
 from core.hooks import hooks
+from core.mcp import MCPManager
+from core.approval import approval_manager
+from channels.webhook import webhook_adapter
 from agents.manager import AgentManager
 from channels.telegram import TelegramBot
 from core.health import HealthMonitor
 from core.scheduler import Scheduler
 from core.jobs import register_jobs
 from panel.app import panel_routes
+from api.openai_server import api_routes
 
 
 # Globals — accessible from panel
@@ -29,6 +33,7 @@ agent_manager: AgentManager = None
 telegram_bot: TelegramBot = None
 health_monitor: HealthMonitor = None
 scheduler: Scheduler = None
+mcp_manager: MCPManager = None
 
 
 # --- HTTP API Routes ---
@@ -106,7 +111,7 @@ async def api_reload(request: Request):
 # --- App Lifecycle ---
 
 async def startup():
-    global agent_manager, telegram_bot, health_monitor, scheduler
+    global agent_manager, telegram_bot, health_monitor, scheduler, mcp_manager
 
     config = get_config()
     setup_logger(level=config.gateway.log_level)
@@ -149,15 +154,69 @@ async def startup():
     scheduler.start()
     log.info(f"Scheduler started ({len(scheduler.get_jobs())} jobs)")
 
+    # Init MCP servers (if configured)
+    mcp_config = getattr(config, '_raw', {}).get('mcp', {}).get('servers', [])
+    if not mcp_config:
+        # Try loading from raw YAML
+        import yaml
+        from core.config import CONFIG_PATH
+        try:
+            raw = yaml.safe_load(CONFIG_PATH.read_text())
+            mcp_config = raw.get('mcp', {}).get('servers', [])
+        except Exception:
+            mcp_config = []
+    if mcp_config:
+        mcp_manager = MCPManager()
+        await mcp_manager.load_servers(mcp_config)
+        log.info(f"MCP: {mcp_manager.server_count} servers, {mcp_manager.tool_count} tools")
+
+    # Init webhook adapter (if configured)
+    try:
+        import yaml
+        from core.config import CONFIG_PATH
+        raw = yaml.safe_load(CONFIG_PATH.read_text())
+        webhooks = raw.get('webhooks', {})
+        if webhooks:
+            webhook_adapter.configure(webhooks)
+            log.info(f"Webhooks: {webhook_adapter.enabled_platforms}")
+    except Exception:
+        pass
+
+    # Wire command approval DM notifications
+    if telegram_bot and telegram_bot.app and config.telegram.admin_chat_id:
+        admin_chat_id = config.telegram.admin_chat_id
+        tg_app = telegram_bot.app
+
+        async def _approval_notify(approval_id, command, reason, user_id, agent_id, **kw):
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Approve", callback_data=f"approve:{approval_id}"),
+                InlineKeyboardButton("Deny", callback_data=f"deny:{approval_id}"),
+            ]])
+            await tg_app.bot.send_message(
+                chat_id=admin_chat_id,
+                text=(
+                    f"Command Approval Request\n"
+                    f"User: {user_id}\nAgent: {agent_id}\n"
+                    f"Reason: {reason}\n"
+                    f"Command: {command[:200]}"
+                ),
+                reply_markup=keyboard,
+            )
+
+        approval_manager.set_notify(_approval_notify)
+
     log.info(f"Pawang ready on port {config.gateway.port}")
     await hooks.emit("startup", providers=list(config.providers.keys()),
                       agents=[a.id for a in config.agents])
 
 
 async def shutdown():
-    global telegram_bot, health_monitor, scheduler
+    global telegram_bot, health_monitor, scheduler, mcp_manager
     log.info("Pawang shutting down...")
     await hooks.emit("shutdown")
+    if mcp_manager:
+        await mcp_manager.shutdown()
     if scheduler:
         scheduler.stop()
     if health_monitor:
@@ -186,7 +245,7 @@ routes = [
     Route("/api/sessions", api_sessions),
     Route("/api/jobs", api_jobs),
     Route("/api/reload", api_reload, methods=["POST"]),
-] + panel_routes
+] + api_routes + panel_routes
 
 app = Starlette(routes=routes, lifespan=lifespan)
 

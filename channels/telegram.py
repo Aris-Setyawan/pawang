@@ -20,6 +20,7 @@ from core.rate_limit import RateLimiter
 from core.intent import classify_intent
 from core.pairing import PairingManager
 from core.hooks import hooks
+from core.approval import approval_manager
 from core import completion
 from agents.manager import AgentManager
 from providers.base import Message, ThinkingConfig
@@ -473,6 +474,20 @@ class TelegramBot:
                 "\u2699\ufe0f Settings", reply_markup=keyboard,
             )
 
+        elif data.startswith("approve:"):
+            approval_id = data.split(":")[1]
+            if approval_manager.approve(approval_id):
+                await query.edit_message_text(f"Approved: {approval_id}")
+            else:
+                await query.edit_message_text("Approval expired or already handled.")
+
+        elif data.startswith("deny:"):
+            approval_id = data.split(":")[1]
+            if approval_manager.deny(approval_id):
+                await query.edit_message_text(f"Denied: {approval_id}")
+            else:
+                await query.edit_message_text("Approval expired or already handled.")
+
     # --- Commands ---
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -497,6 +512,10 @@ class TelegramBot:
             "/memory - Lihat/kelola memory tersimpan\n"
             "/search - Cari di riwayat percakapan\n"
             "/insights - Statistik & analytics\n"
+            "/moa - Multi-model reasoning\n"
+            "/checkpoint - Simpan conversation state\n"
+            "/rollback - Rollback ke checkpoint\n"
+            "/profile - Lihat profil user\n"
             "/pair - Pairing kode untuk akses bot"
         )
 
@@ -987,6 +1006,204 @@ class TelegramBot:
         if len(report) > 4096:
             report = report[:4093] + "..."
         await update.message.reply_text(report)
+
+    async def _cmd_moa(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Mixture of Agents — multi-model reasoning.
+        /moa <question>
+        """
+        if not self._is_allowed(update.effective_user.id):
+            return
+        args = context.args
+        if not args:
+            await update.message.reply_text(
+                "Usage: /moa <pertanyaan>\n"
+                "Spawn multiple AI models, lalu synthesize jawaban terbaik."
+            )
+            return
+
+        question = " ".join(args)
+        user_id = str(update.effective_user.id)
+        agent_id = self._get_agent_id(update.effective_user.id)
+        provider_name, model = self.manager.get_agent_model(
+            self.manager.get_session(agent_id, user_id))
+
+        await update.message.chat.send_action(ChatAction.TYPING)
+        msg = await update.message.reply_text("MoA: spawning reference models...")
+
+        from core.moa import mixture_of_agents, get_available_reference_models
+        refs = get_available_reference_models(self.config, provider_name, model)
+        if not refs:
+            await msg.edit_text("Tidak ada reference model tersedia untuk MoA.")
+            return
+
+        try:
+            ref_names = [f"{p}/{m}" for p, m in refs]
+            await msg.edit_text(f"MoA: {len(refs)} models ({', '.join(ref_names)})...")
+
+            result = await mixture_of_agents(
+                self.config, question, refs,
+                master_provider=provider_name, master_model=model,
+            )
+
+            header = f"[MoA — {len(refs)} models]\n\n"
+            text = header + result
+            if len(text) <= 4096:
+                await msg.edit_text(text)
+            else:
+                await msg.edit_text(text[:4096])
+                remaining = text[4096:]
+                while remaining:
+                    await update.message.reply_text(remaining[:4096])
+                    remaining = remaining[4096:]
+
+            db = get_db()
+            db.record_usage(provider_name, model, agent_id, user_id,
+                            len(question) // 4, len(result) // 4, 0)
+        except Exception as e:
+            log.error(f"MoA error: {e}")
+            await msg.edit_text(f"MoA error: {str(e)[:200]}")
+
+    async def _cmd_checkpoint(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Save or list conversation checkpoints.
+        /checkpoint       — list checkpoints
+        /checkpoint save  — save current state
+        """
+        if not self._is_allowed(update.effective_user.id):
+            return
+        user_id = str(update.effective_user.id)
+        agent_id = self._get_agent_id(update.effective_user.id)
+        session = self.manager.get_session(agent_id, user_id)
+        session_key = f"{agent_id}:{user_id}"
+
+        args = context.args
+        if args and args[0].lower() == "save":
+            label = " ".join(args[1:]) if len(args) > 1 else ""
+            messages = [{"role": m.role, "content": m.content}
+                        for m in session.get_messages(include_system=False)]
+            if not messages:
+                await update.message.reply_text("Tidak ada pesan untuk di-checkpoint.")
+                return
+            from core.checkpoint import save_checkpoint
+            cp_id = save_checkpoint(session_key, user_id, messages, label)
+            await update.message.reply_text(
+                f"Checkpoint #{cp_id} tersimpan ({len(messages)} pesan)"
+            )
+            return
+
+        # List checkpoints
+        from core.checkpoint import list_checkpoints
+        cps = list_checkpoints(session_key, user_id)
+        if not cps:
+            await update.message.reply_text(
+                "Belum ada checkpoint.\nGunakan /checkpoint save untuk simpan."
+            )
+            return
+        lines = ["Checkpoints:\n"]
+        for cp in cps:
+            from datetime import datetime
+            dt = datetime.utcfromtimestamp(cp["created_at"]).strftime("%m/%d %H:%M")
+            lines.append(f"  #{cp['id']} — {cp.get('label', '')} ({dt})")
+        lines.append("\nGunakan /rollback <id> untuk restore.")
+        await update.message.reply_text("\n".join(lines))
+
+    async def _cmd_rollback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Rollback conversation to a checkpoint.
+        /rollback <checkpoint_id>
+        """
+        if not self._is_allowed(update.effective_user.id):
+            return
+        args = context.args
+        if not args:
+            await update.message.reply_text("Usage: /rollback <checkpoint_id>")
+            return
+
+        try:
+            cp_id = int(args[0])
+        except ValueError:
+            await update.message.reply_text("ID harus berupa angka.")
+            return
+
+        user_id = str(update.effective_user.id)
+        from core.checkpoint import load_checkpoint
+        messages = load_checkpoint(cp_id, user_id)
+        if messages is None:
+            await update.message.reply_text(f"Checkpoint #{cp_id} tidak ditemukan.")
+            return
+
+        # Restore session
+        agent_id = self._get_agent_id(update.effective_user.id)
+        session = self.manager.get_session(agent_id, user_id)
+        session.messages.clear()
+        for m in messages:
+            from providers.base import Message
+            session.messages.append(Message(role=m["role"], content=m["content"]))
+
+        await update.message.reply_text(
+            f"Rollback ke checkpoint #{cp_id} ({len(messages)} pesan)"
+        )
+
+    async def _cmd_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user profile built from conversation history.
+        /profile [user_id]
+        """
+        if not self._is_allowed(update.effective_user.id):
+            return
+
+        args = context.args
+        user_id = args[0] if args else str(update.effective_user.id)
+
+        from core.user_profile import get_profile_summary
+        summary = get_profile_summary(user_id)
+        await update.message.reply_text(summary)
+
+    async def _handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle photo messages — analyze with vision model."""
+        if not update.message or not update.message.photo:
+            return
+        if not self._is_allowed(update.effective_user.id):
+            return
+
+        user_id = str(update.effective_user.id)
+
+        # Rate limit
+        allowed, _ = self.rate_limiter.check(user_id)
+        if not allowed:
+            wait = self.rate_limiter.get_wait_time(user_id)
+            await update.message.reply_text(f"Rate limit — tunggu {int(wait)} detik.")
+            return
+
+        await update.message.chat.send_action(ChatAction.TYPING)
+
+        # Get highest resolution photo
+        photo = update.message.photo[-1]
+        caption = update.message.caption or "Describe this image in detail. Match the user's language."
+
+        try:
+            tg_file = await photo.get_file()
+            image_data = await tg_file.download_as_bytearray()
+        except Exception as e:
+            log.error(f"Photo download error: {e}")
+            await update.message.reply_text("Gagal download foto.")
+            return
+
+        from core.vision import analyze_image
+        msg = await update.message.reply_text("Analyzing image...")
+
+        result = await analyze_image(self.config, bytes(image_data), caption)
+
+        if result:
+            text = f"[Vision Analysis]\n\n{result}"
+            if len(text) <= 4096:
+                await msg.edit_text(text)
+            else:
+                await msg.edit_text(text[:4096])
+        else:
+            await msg.edit_text("Tidak ada vision model yang tersedia. Pastikan Google/OpenAI API key terpasang.")
+
+        # Record usage
+        agent_id = self._get_agent_id(update.effective_user.id)
+        db = get_db()
+        db.record_usage("vision", "auto", agent_id, user_id, 0, len(result or "") // 4, 0)
 
     async def _cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_allowed(update.effective_user.id):
@@ -1885,7 +2102,14 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("search", self._cmd_search))
         self.app.add_handler(CommandHandler("pair", self._cmd_pair))
         self.app.add_handler(CommandHandler("insights", self._cmd_insights))
+        self.app.add_handler(CommandHandler("moa", self._cmd_moa))
+        self.app.add_handler(CommandHandler("checkpoint", self._cmd_checkpoint))
+        self.app.add_handler(CommandHandler("rollback", self._cmd_rollback))
+        self.app.add_handler(CommandHandler("profile", self._cmd_profile))
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
+        self.app.add_handler(
+            MessageHandler(filters.PHOTO, self._handle_photo)
+        )
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
         )
@@ -1911,6 +2135,10 @@ class TelegramBot:
             BotCommand("search", "Cari di riwayat percakapan"),
             BotCommand("pair", "Pairing kode untuk akses bot"),
             BotCommand("insights", "Statistik & analytics"),
+            BotCommand("moa", "Multi-model reasoning"),
+            BotCommand("checkpoint", "Simpan/lihat checkpoint"),
+            BotCommand("rollback", "Rollback ke checkpoint"),
+            BotCommand("profile", "Lihat profil user"),
         ])
 
         log.info("Telegram bot configured")

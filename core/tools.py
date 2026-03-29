@@ -271,6 +271,82 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_read",
+            "description": "Baca isi file di workspace. Untuk lihat file yang dibuat/dimodifikasi.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path ke file (harus di workspace/ atau /tmp)",
+                    },
+                    "max_lines": {
+                        "type": "integer",
+                        "description": "Jumlah baris maksimum (default 200)",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_write",
+            "description": "Tulis/buat file di workspace.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path file tujuan (harus di workspace/ atau /tmp)",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Isi file yang ingin ditulis",
+                    },
+                },
+                "required": ["file_path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_search",
+            "description": "Cari file berdasarkan pattern di workspace. Contoh: *.py, *.log",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Glob pattern pencarian (contoh: *.py, *.json)",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Fetch dan ekstrak konten teks dari URL. Untuk membaca halaman web.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL yang ingin di-fetch (http/https)",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
 ]
 
 
@@ -278,15 +354,15 @@ TOOL_DEFINITIONS = [
 
 # Which tools each agent can use
 AGENT_TOOLS = {
-    "agent1": ["delegate_task", "check_balances", "web_search", "weather", "save_memory", "recall_memories", "delete_memory"],
-    "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash"],
-    "agent3": ["web_search", "weather", "run_bash"],
-    "agent4": ["run_bash", "send_file", "web_search"],
+    "agent1": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather", "save_memory", "recall_memories", "delete_memory"],
+    "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash", "file_read", "file_write"],
+    "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search"],
+    "agent4": ["run_bash", "send_file", "web_search", "file_read", "file_write", "file_search"],
     # Backup agents mirror their primary
-    "agent5": ["delegate_task", "check_balances", "web_search", "weather", "save_memory", "recall_memories", "delete_memory"],
-    "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash"],
-    "agent7": ["web_search", "weather", "run_bash"],
-    "agent8": ["run_bash", "send_file", "web_search"],
+    "agent5": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather", "save_memory", "recall_memories", "delete_memory"],
+    "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash", "file_read", "file_write"],
+    "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search"],
+    "agent8": ["run_bash", "send_file", "web_search", "file_read", "file_write", "file_search"],
 }
 
 # Tools blocked for child agents during delegation
@@ -303,13 +379,26 @@ def get_agent_tools(agent_id: str, is_delegated: bool = False) -> list[dict]:
     If is_delegated=True, blocks tools that child agents shouldn't use
     (delegate_task, memory writes) to prevent recursive delegation and
     unauthorized memory modification.
+
+    Also injects MCP tools if MCP servers are connected.
     """
     allowed = AGENT_TOOLS.get(agent_id, [])
     if not allowed:
         return []
     if is_delegated:
         allowed = [t for t in allowed if t not in DELEGATION_BLOCKED_TOOLS]
-    return [_TOOL_BY_NAME[name] for name in allowed if name in _TOOL_BY_NAME]
+    tools = [_TOOL_BY_NAME[name] for name in allowed if name in _TOOL_BY_NAME]
+
+    # Inject MCP tools (if available)
+    if not is_delegated:
+        try:
+            from main import mcp_manager
+            if mcp_manager:
+                tools.extend(mcp_manager.get_all_tools())
+        except (ImportError, AttributeError):
+            pass
+
+    return tools
 
 
 # --- Tool Execution ---
@@ -407,11 +496,25 @@ def _detect_dangerous(command: str) -> tuple[bool, str]:
     return False, ""
 
 
-async def _run_bash(command: str, timeout: int = 30) -> ToolResult:
+async def _run_bash(command: str, timeout: int = 30,
+                    user_id: str = "", agent_id: str = "") -> ToolResult:
     """Run an arbitrary bash command."""
     is_dangerous, reason = _detect_dangerous(command)
     if is_dangerous:
-        return ToolResult(name="bash", output=f"Blocked: {reason}", success=False)
+        # Try approval flow instead of outright block
+        try:
+            from core.approval import approval_manager
+            if approval_manager._notify:
+                approved = await approval_manager.request_approval(
+                    command, reason, user_id, agent_id,
+                )
+                if not approved:
+                    return ToolResult(name="bash", output=f"Blocked (denied/timeout): {reason}", success=False)
+                # Approved — continue execution
+            else:
+                return ToolResult(name="bash", output=f"Blocked: {reason}", success=False)
+        except Exception:
+            return ToolResult(name="bash", output=f"Blocked: {reason}", success=False)
 
     try:
         proc = await asyncio.create_subprocess_shell(
@@ -477,7 +580,7 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
 
     elif name == "run_bash":
         command = arguments.get("command", "")
-        return await _run_bash(command)
+        return await _run_bash(command, user_id=user_id, agent_id=agent_id)
 
     elif name == "web_search":
         from skills.web_search import WebSearchSkill
@@ -540,6 +643,43 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
         if db.delete_memory(memory_id, user_id):
             return ToolResult(name="delete_memory", output=f"Memory #{memory_id} dihapus.", success=True)
         return ToolResult(name="delete_memory", output=f"Memory #{memory_id} tidak ditemukan.", success=False)
+
+    elif name == "file_read":
+        from core.file_tools import file_read as _file_read
+        path = arguments.get("file_path", "")
+        max_lines = arguments.get("max_lines", 200)
+        result = _file_read(path, max_lines=max_lines)
+        return ToolResult(name="file_read", output=result, success=not result.startswith("Error"))
+
+    elif name == "file_write":
+        from core.file_tools import file_write as _file_write
+        path = arguments.get("file_path", "")
+        content = arguments.get("content", "")
+        result = _file_write(path, content)
+        return ToolResult(name="file_write", output=result, success=not result.startswith("Error"))
+
+    elif name == "file_search":
+        from core.file_tools import file_search as _file_search
+        pattern = arguments.get("pattern", "*")
+        result = _file_search(pattern)
+        return ToolResult(name="file_search", output=result, success=True)
+
+    elif name == "web_fetch":
+        from core.file_tools import web_fetch_async
+        url = arguments.get("url", "")
+        result = await web_fetch_async(url)
+        return ToolResult(name="web_fetch", output=result, success=not result.startswith("Error"))
+
+    elif name.startswith("mcp_"):
+        # MCP tool call — route to MCP manager
+        try:
+            from main import mcp_manager
+            if mcp_manager:
+                result = await mcp_manager.call_tool(name, arguments)
+                return ToolResult(name=name, output=result, success=True)
+            return ToolResult(name=name, output="MCP not initialized", success=False)
+        except Exception as e:
+            return ToolResult(name=name, output=f"MCP error: {e}", success=False)
 
     else:
         return ToolResult(name=name, output=f"Unknown tool: {name}", success=False)

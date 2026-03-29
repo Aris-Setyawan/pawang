@@ -7,6 +7,7 @@ from .weather import WeatherSkill
 from .summarize import SummarizeSkill
 from .youtube import YouTubeSkill
 from .github_skill import GitHubSkill
+from .yaml_loader import load_yaml_skills
 
 
 class SkillManager:
@@ -15,6 +16,7 @@ class SkillManager:
     def __init__(self):
         self._skills: dict[str, Skill] = {}
         self._load_builtin()
+        self._load_yaml()
 
     def _load_builtin(self):
         """Load all built-in skills."""
@@ -25,6 +27,11 @@ class SkillManager:
             YouTubeSkill(),
             GitHubSkill(),
         ]:
+            self._skills[skill.name] = skill
+
+    def _load_yaml(self):
+        """Load YAML procedure skills."""
+        for skill in load_yaml_skills():
             self._skills[skill.name] = skill
 
     def get(self, name: str) -> Optional[Skill]:
