@@ -45,7 +45,9 @@ async def tts_google(text: str, voice: str = "Aoede") -> str:
     for p in parts:
         if "inlineData" in p:
             raw = base64.b64decode(p["inlineData"]["data"])
-            wav_path = tempfile.mktemp(suffix=".wav")
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            wav_path = tmp.name
+            tmp.close()
             with wave.open(wav_path, "wb") as wf:
                 wf.setnchannels(1)
                 wf.setsampwidth(2)
@@ -71,7 +73,9 @@ async def tts_openai(text: str, voice: str = "nova") -> str:
     if not api_key:
         raise RuntimeError("OpenAI key not configured")
 
-    out_path = tempfile.mktemp(suffix=".ogg")
+    tmp = tempfile.NamedTemporaryFile(suffix=".ogg", delete=False)
+    out_path = tmp.name
+    tmp.close()
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(

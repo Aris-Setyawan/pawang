@@ -43,6 +43,8 @@ class Session:
 class AgentManager:
     """Manages agents, sessions, persistence, and inter-agent delegation."""
 
+    MAX_CACHED_SESSIONS = 200
+
     def __init__(self, config: PawangConfig):
         self.config = config
         self._sessions: dict[str, Session] = {}
@@ -104,7 +106,19 @@ class AgentManager:
                     log.info(f"Restored {len(history)} messages for {key}")
 
             self._sessions[key] = session
+            self._evict_if_needed()
         return self._sessions[key]
+
+    def _evict_if_needed(self):
+        """Evict oldest sessions when cache exceeds max size."""
+        if len(self._sessions) <= self.MAX_CACHED_SESSIONS:
+            return
+        # Remove oldest entries (first inserted, since dict is ordered in Python 3.7+)
+        to_remove = len(self._sessions) - self.MAX_CACHED_SESSIONS
+        keys = list(self._sessions.keys())[:to_remove]
+        for k in keys:
+            del self._sessions[k]
+        log.info(f"Evicted {to_remove} cached sessions (max={self.MAX_CACHED_SESSIONS})")
 
     def save_message(self, session: Session, role: str, content: str,
                      model: str = "", provider: str = ""):

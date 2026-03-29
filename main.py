@@ -137,8 +137,8 @@ async def startup():
     # Start scheduler
     scheduler = Scheduler()
     register_jobs(scheduler, config)
-    if telegram_bot and telegram_bot.app:
-        admin_chat_id = config.telegram.admin_chat_id or "613802669"
+    if telegram_bot and telegram_bot.app and config.telegram.admin_chat_id:
+        admin_chat_id = config.telegram.admin_chat_id
         async def _notify(text):
             try:
                 await telegram_bot.app.bot.send_message(chat_id=admin_chat_id, text=text)

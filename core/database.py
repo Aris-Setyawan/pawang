@@ -4,6 +4,7 @@ import sqlite3
 import json
 import time
 from pathlib import Path
+from threading import RLock
 from typing import Optional
 
 from core.logger import log
@@ -17,7 +18,8 @@ class Database:
     def __init__(self, path: Path = DB_PATH):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(path), check_same_thread=False)
+        self._lock = RLock()
+        self.conn = sqlite3.connect(str(path), check_same_thread=False, timeout=10.0)
         self.conn.row_factory = sqlite3.Row
         self._setup()
 
@@ -98,20 +100,20 @@ class Database:
         """Save a message to history."""
         tokens_est = len(content) // 4
         now = time.time()
-        self.conn.execute(
-            "INSERT INTO messages (session_key, agent_id, user_id, role, content, model, provider, tokens_est, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (session_key, agent_id, user_id, role, content, model, provider, tokens_est, now),
-        )
-        # Update session
-        self.conn.execute(
-            "INSERT INTO sessions (session_key, agent_id, user_id, message_count, last_active, created_at) "
-            "VALUES (?, ?, ?, 1, ?, ?) "
-            "ON CONFLICT(session_key) DO UPDATE SET "
-            "message_count = message_count + 1, last_active = ?",
-            (session_key, agent_id, user_id, now, now, now),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO messages (session_key, agent_id, user_id, role, content, model, provider, tokens_est, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (session_key, agent_id, user_id, role, content, model, provider, tokens_est, now),
+            )
+            self.conn.execute(
+                "INSERT INTO sessions (session_key, agent_id, user_id, message_count, last_active, created_at) "
+                "VALUES (?, ?, ?, 1, ?, ?) "
+                "ON CONFLICT(session_key) DO UPDATE SET "
+                "message_count = message_count + 1, last_active = ?",
+                (session_key, agent_id, user_id, now, now, now),
+            )
+            self.conn.commit()
 
     def get_history(self, session_key: str, limit: int = 50) -> list[dict]:
         """Get message history for a session."""
@@ -125,20 +127,22 @@ class Database:
 
     def clear_history(self, session_key: str):
         """Clear message history for a session."""
-        self.conn.execute("DELETE FROM messages WHERE session_key = ?", (session_key,))
-        self.conn.execute(
-            "UPDATE sessions SET message_count = 0 WHERE session_key = ?",
-            (session_key,),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("DELETE FROM messages WHERE session_key = ?", (session_key,))
+            self.conn.execute(
+                "UPDATE sessions SET message_count = 0 WHERE session_key = ?",
+                (session_key,),
+            )
+            self.conn.commit()
 
     def save_session_model(self, session_key: str, provider: str, model: str):
         """Save active model override for a session."""
-        self.conn.execute(
-            "UPDATE sessions SET active_provider = ?, active_model = ? WHERE session_key = ?",
-            (provider, model, session_key),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "UPDATE sessions SET active_provider = ?, active_model = ? WHERE session_key = ?",
+                (provider, model, session_key),
+            )
+            self.conn.commit()
 
     def get_session(self, session_key: str) -> Optional[dict]:
         """Get session data."""
@@ -158,13 +162,14 @@ class Database:
                      input_tokens: int = 0, output_tokens: int = 0,
                      latency_ms: float = 0, success: bool = True, error: str = ""):
         """Record API usage for tracking."""
-        self.conn.execute(
-            "INSERT INTO usage (provider, model, agent_id, user_id, input_tokens, output_tokens, "
-            "latency_ms, success, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (provider, model, agent_id, user_id, input_tokens, output_tokens,
-             latency_ms, int(success), error, time.time()),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO usage (provider, model, agent_id, user_id, input_tokens, output_tokens, "
+                "latency_ms, success, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (provider, model, agent_id, user_id, input_tokens, output_tokens,
+                 latency_ms, int(success), error, time.time()),
+            )
+            self.conn.commit()
 
     def get_usage_stats(self, hours: int = 24) -> dict:
         """Get usage statistics for the last N hours."""
@@ -198,21 +203,22 @@ class Database:
     def save_memory(self, user_id: str, content: str, category: str = "general",
                     agent_id: str = ""):
         """Save a fact/memory about a user."""
-        # Avoid exact duplicates
-        existing = self.conn.execute(
-            "SELECT id FROM memories WHERE user_id = ? AND content = ?",
-            (user_id, content),
-        ).fetchone()
-        if existing:
-            return existing["id"]
+        with self._lock:
+            # Avoid exact duplicates
+            existing = self.conn.execute(
+                "SELECT id FROM memories WHERE user_id = ? AND content = ?",
+                (user_id, content),
+            ).fetchone()
+            if existing:
+                return existing["id"]
 
-        self.conn.execute(
-            "INSERT INTO memories (user_id, content, category, agent_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, content, category, agent_id, time.time()),
-        )
-        self.conn.commit()
-        return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            self.conn.execute(
+                "INSERT INTO memories (user_id, content, category, agent_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, content, category, agent_id, time.time()),
+            )
+            self.conn.commit()
+            return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def get_memories(self, user_id: str, category: Optional[str] = None,
                      limit: int = 50) -> list[dict]:
@@ -233,15 +239,18 @@ class Database:
 
     def delete_memory(self, memory_id: int, user_id: str) -> bool:
         """Delete a specific memory by ID (scoped to user for safety)."""
-        cur = self.conn.execute(
-            "DELETE FROM memories WHERE id = ? AND user_id = ?",
-            (memory_id, user_id),
-        )
-        self.conn.commit()
-        return cur.rowcount > 0
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM memories WHERE id = ? AND user_id = ?",
+                (memory_id, user_id),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
 
     def search_memories(self, user_id: str, query: str, limit: int = 20) -> list[dict]:
         """Search memories by keyword (simple LIKE match)."""
+        if not query or len(query) > 200:
+            return []
         rows = self.conn.execute(
             "SELECT id, content, category, agent_id, created_at FROM memories "
             "WHERE user_id = ? AND content LIKE ? ORDER BY created_at DESC LIMIT ?",
@@ -254,15 +263,16 @@ class Database:
     def save_user_settings(self, user_id: str, agent_id: str = "",
                            thinking_mode: str = "", voice_reply: bool = False):
         """Save user preferences."""
-        self.conn.execute(
-            "INSERT INTO user_settings (user_id, agent_id, thinking_mode, voice_reply, updated_at) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET "
-            "agent_id = ?, thinking_mode = ?, voice_reply = ?, updated_at = ?",
-            (user_id, agent_id, thinking_mode, int(voice_reply), time.time(),
-             agent_id, thinking_mode, int(voice_reply), time.time()),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO user_settings (user_id, agent_id, thinking_mode, voice_reply, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "agent_id = ?, thinking_mode = ?, voice_reply = ?, updated_at = ?",
+                (user_id, agent_id, thinking_mode, int(voice_reply), time.time(),
+                 agent_id, thinking_mode, int(voice_reply), time.time()),
+            )
+            self.conn.commit()
 
     def get_user_settings(self, user_id: str) -> Optional[dict]:
         """Get user preferences."""

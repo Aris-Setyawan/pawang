@@ -93,18 +93,25 @@ class TaskManager:
         return task
 
     def complete_task(self, user_id: str, response: str = ""):
-        task = self._tasks.get(user_id)
+        task = self._tasks.pop(user_id, None)
         if task:
             task.state = TaskState.COMPLETED
             task.partial_response = response
             self._history.append(task)
+            self._trim_history()
 
     def fail_task(self, user_id: str, error: str = ""):
-        task = self._tasks.get(user_id)
+        task = self._tasks.pop(user_id, None)
         if task:
             task.state = TaskState.FAILED
             task.partial_response = error
             self._history.append(task)
+            self._trim_history()
+
+    def _trim_history(self, max_size: int = 100):
+        """Keep history bounded to prevent memory leak."""
+        if len(self._history) > max_size:
+            self._history = self._history[-max_size:]
 
     def pause_task(self, user_id: str) -> Optional[Task]:
         task = self.get_active_task(user_id)
