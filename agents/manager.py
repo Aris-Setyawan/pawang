@@ -69,6 +69,14 @@ class AgentManager:
             soul = soul_path.read_text().strip()
             prompt_text = soul + "\n\n" + prompt_text if prompt_text else soul
 
+        # Inject current agent name (supports runtime rename)
+        prompt_text = (
+            f"## Current Identity\n"
+            f"Nama kamu sekarang: **{agent.name}**. "
+            f"Gunakan nama ini saat memperkenalkan diri atau ditanya siapa kamu.\n\n"
+            + prompt_text
+        )
+
         # Platform formatting hints
         platform_hints = {
             "telegram": (
@@ -199,6 +207,24 @@ class AgentManager:
         db = get_db()
         db.save_session_model(session.key, provider, model)
         log.info(f"Session {session.key} switched to {provider}/{model}")
+
+    def refresh_system_prompt(self, agent_id: str, user_id: str):
+        """Rebuild system prompt (e.g. after rename) and update cached session."""
+        key = self._session_key(agent_id, user_id)
+        session = self._sessions.get(key)
+        if not session:
+            return
+        agent = self.config.get_agent(agent_id)
+        if not agent:
+            return
+        new_prompt = self._build_system_prompt(agent, user_id)
+        if not new_prompt:
+            return
+        if session.messages and session.messages[0].role == "system":
+            session.messages[0] = Message(role="system", content=new_prompt)
+        else:
+            session.messages.insert(0, Message(role="system", content=new_prompt))
+        log.info(f"Refreshed system prompt for {key} (name={agent.name})")
 
     def refresh_memories(self, agent_id: str, user_id: str):
         """Refresh the system prompt in a cached session with latest memories."""

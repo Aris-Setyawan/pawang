@@ -1373,6 +1373,45 @@ class TelegramBot:
             "\u2699\ufe0f Settings", reply_markup=keyboard,
         )
 
+    # --- Rename Agent ---
+
+    async def _cmd_rename(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Rename the current agent: /rename <nama_baru>"""
+        if not self._is_allowed(update.effective_user.id):
+            return
+        args = context.args
+        if not args:
+            await update.message.reply_text(
+                "Usage: /rename <nama_baru>\n"
+                "Contoh: /rename Wulan"
+            )
+            return
+
+        new_name = " ".join(args).strip()
+        if len(new_name) > 50:
+            await update.message.reply_text("Nama terlalu panjang (maks 50 karakter).")
+            return
+
+        user_id = str(update.effective_user.id)
+        agent_id = self._get_agent_id(update.effective_user.id)
+        agent = self.config.get_agent(agent_id)
+        if not agent:
+            await update.message.reply_text("Agent tidak ditemukan.")
+            return
+
+        old_name = agent.name
+        agent.name = new_name
+
+        # Refresh system prompt in active session so agent knows its new name
+        if self.manager:
+            self.manager.refresh_system_prompt(agent_id, user_id)
+
+        log.info(f"Agent {agent_id} renamed: {old_name} -> {new_name} (by user {user_id})")
+        await update.message.reply_text(
+            f"Agent {agent_id} renamed: {old_name} -> **{new_name}**",
+            parse_mode="Markdown",
+        )
+
     # --- Memory Management ---
 
     async def _cmd_memory(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2106,6 +2145,7 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("checkpoint", self._cmd_checkpoint))
         self.app.add_handler(CommandHandler("rollback", self._cmd_rollback))
         self.app.add_handler(CommandHandler("profile", self._cmd_profile))
+        self.app.add_handler(CommandHandler("rename", self._cmd_rename))
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
         self.app.add_handler(
             MessageHandler(filters.PHOTO, self._handle_photo)
@@ -2139,6 +2179,7 @@ class TelegramBot:
             BotCommand("checkpoint", "Simpan/lihat checkpoint"),
             BotCommand("rollback", "Rollback ke checkpoint"),
             BotCommand("profile", "Lihat profil user"),
+            BotCommand("rename", "Ganti nama agent"),
         ])
 
         log.info("Telegram bot configured")
