@@ -205,6 +205,11 @@ TOOL_DEFINITIONS = [
                         "enum": ["profile", "preference", "project", "general"],
                         "description": "Kategori memory: profile (data diri), preference (preferensi), project (project/pekerjaan), general (lain-lain)",
                     },
+                    "memory_type": {
+                        "type": "string",
+                        "enum": ["user", "agent"],
+                        "description": "Tipe: user (fakta tentang user) atau agent (catatan/observasi agent)",
+                    },
                 },
                 "required": ["content"],
             },
@@ -284,16 +289,26 @@ AGENT_TOOLS = {
     "agent8": ["run_bash", "send_file", "web_search"],
 }
 
+# Tools blocked for child agents during delegation
+DELEGATION_BLOCKED_TOOLS = {"delegate_task", "save_memory", "delete_memory"}
+
 # Build lookup: tool_name -> tool_definition
 _TOOL_BY_NAME = {t["function"]["name"]: t for t in TOOL_DEFINITIONS}
 _TOOL_BY_NAME["delegate_task"] = DELEGATE_TOOL
 
 
-def get_agent_tools(agent_id: str) -> list[dict]:
-    """Get tool definitions for a specific agent."""
+def get_agent_tools(agent_id: str, is_delegated: bool = False) -> list[dict]:
+    """Get tool definitions for a specific agent.
+
+    If is_delegated=True, blocks tools that child agents shouldn't use
+    (delegate_task, memory writes) to prevent recursive delegation and
+    unauthorized memory modification.
+    """
     allowed = AGENT_TOOLS.get(agent_id, [])
     if not allowed:
         return []
+    if is_delegated:
+        allowed = [t for t in allowed if t not in DELEGATION_BLOCKED_TOOLS]
     return [_TOOL_BY_NAME[name] for name in allowed if name in _TOOL_BY_NAME]
 
 
@@ -448,7 +463,8 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
             return ToolResult(name="save_memory", output=f"Memory ditolak: {reason}", success=False)
         user_id = arguments.get("_user_id", "unknown")
         agent_id = arguments.get("_agent_id", "")
-        mem_id = db.save_memory(user_id, content, category, agent_id)
+        memory_type = arguments.get("memory_type", "user")
+        mem_id = db.save_memory(user_id, content, category, agent_id, memory_type=memory_type)
         # Refresh memories in active session
         try:
             from main import agent_manager

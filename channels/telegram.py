@@ -16,6 +16,7 @@ from core.config import PawangConfig
 from core.database import get_db
 from core.logger import log
 from core.tasks import TaskManager, TaskState
+from core.rate_limit import RateLimiter
 from core.intent import classify_intent
 from core import completion
 from agents.manager import AgentManager
@@ -36,6 +37,7 @@ class TelegramBot:
         self.manager = agent_manager
         self.tasks = TaskManager()
         self.skill_manager = SkillManager()
+        self.rate_limiter = RateLimiter(max_requests=20, window_seconds=60)
         self.app: Optional[Application] = None
         self._user_agent: dict[int, str] = {}
         self._waiting_key: dict[int, str] = {}
@@ -872,6 +874,51 @@ class TelegramBot:
         self.manager.clear_session(agent_id, user_id)
         await update.message.reply_text("Conversation cleared.")
 
+    async def _cmd_export(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Export conversation history as a text file."""
+        if not self._is_allowed(update.effective_user.id):
+            return
+        import tempfile
+        import os
+
+        user_id = str(update.effective_user.id)
+        agent_id = self._get_agent_id(update.effective_user.id)
+        session = self.manager.get_session(agent_id, user_id)
+        messages = session.get_messages(include_system=False)
+
+        if not messages:
+            await update.message.reply_text("Tidak ada pesan untuk di-export.")
+            return
+
+        # Build text
+        lines = [f"Pawang Conversation Export — {agent_id}", "=" * 40, ""]
+        for m in messages:
+            role_label = "You" if m.role == "user" else "AI"
+            content = m.content[:2000] if len(m.content) > 2000 else m.content
+            lines.append(f"[{role_label}]")
+            lines.append(content)
+            lines.append("")
+
+        text = "\n".join(lines)
+
+        # Send as file
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", prefix="pawang_export_",
+            delete=False, encoding="utf-8",
+        )
+        tmp.write(text)
+        tmp_path = tmp.name
+        tmp.close()
+
+        try:
+            await update.message.reply_document(
+                document=open(tmp_path, "rb"),
+                filename=f"pawang_{agent_id}_{user_id}.txt",
+                caption=f"Export: {len(messages)} messages",
+            )
+        finally:
+            os.unlink(tmp_path)
+
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_allowed(update.effective_user.id):
             return
@@ -1437,6 +1484,15 @@ class TelegramBot:
 
     async def _run_task(self, update: Update, user_id: str, resume_from=None):
         """Run a task with streaming, cancellation support."""
+        # Rate limit check
+        allowed, remaining = self.rate_limiter.check(user_id)
+        if not allowed:
+            wait = self.rate_limiter.get_wait_time(user_id)
+            await update.message.reply_text(
+                f"Rate limit — tunggu {int(wait)} detik."
+            )
+            return
+
         agent_id = self._get_agent_id(update.effective_user.id)
         session = self.manager.get_session(agent_id, user_id)
         provider_name, model = self.manager.get_agent_model(session)
@@ -1686,6 +1742,7 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("usage", self._cmd_usage))
         self.app.add_handler(CommandHandler("settings", self._cmd_settings))
         self.app.add_handler(CommandHandler("memory", self._cmd_memory))
+        self.app.add_handler(CommandHandler("export", self._cmd_export))
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
         self.app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
@@ -1708,6 +1765,7 @@ class TelegramBot:
             BotCommand("usage", "Statistik penggunaan"),
             BotCommand("settings", "Pengaturan bot"),
             BotCommand("memory", "Lihat/kelola memory"),
+            BotCommand("export", "Export riwayat percakapan"),
         ])
 
         log.info("Telegram bot configured")

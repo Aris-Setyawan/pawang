@@ -52,24 +52,57 @@ class AgentManager:
     def _session_key(self, agent_id: str, user_id: str) -> str:
         return f"{agent_id}:{user_id}"
 
-    def _build_system_prompt(self, agent: 'AgentConfig', user_id: str) -> str:
-        """Build system prompt with user memories injected."""
+    def _build_system_prompt(self, agent: 'AgentConfig', user_id: str,
+                             platform: str = "telegram") -> str:
+        """Build system prompt with platform hints and user memories."""
         prompt_text = ""
         if agent.system_prompt_file:
             prompt_path = Path(__file__).parent.parent / agent.system_prompt_file
             if prompt_path.exists():
                 prompt_text = prompt_path.read_text().strip()
 
-        # Inject user memories
+        # Platform formatting hints
+        platform_hints = {
+            "telegram": (
+                "\n\n## Platform: Telegram\n"
+                "- Use markdown sparingly (bold, italic, code blocks).\n"
+                "- Keep messages under 4096 chars. Split long responses.\n"
+                "- Use emoji naturally but not excessively.\n"
+                "- For code, use ``` blocks with language hint."
+            ),
+            "api": (
+                "\n\n## Platform: API\n"
+                "- Full markdown supported.\n"
+                "- No message length limit."
+            ),
+        }
+        prompt_text += platform_hints.get(platform, "")
+
+        # Inject memories (dual: user facts + agent observations)
         db = get_db()
         memories = db.get_memories(user_id, limit=30)
         if memories:
-            mem_lines = [f"- ({m['category']}) {m['content']}" for m in memories]
+            user_mems = [m for m in memories if m.get("memory_type", "user") == "user"]
+            agent_mems = [m for m in memories if m.get("memory_type") == "agent"]
+
+            if user_mems:
+                lines = [f"- ({m['category']}) {m['content']}" for m in user_mems]
+                prompt_text += (
+                    "\n\n## User Memories\n"
+                    "Fakta tentang user ini:\n"
+                    + "\n".join(lines)
+                )
+
+            if agent_mems:
+                lines = [f"- {m['content']}" for m in agent_mems]
+                prompt_text += (
+                    "\n\n## Agent Notes\n"
+                    "Catatan dari interaksi sebelumnya:\n"
+                    + "\n".join(lines)
+                )
+
             prompt_text += (
-                "\n\n## User Memories\n"
-                "Fakta tentang user ini yang sudah kamu simpan sebelumnya:\n"
-                + "\n".join(mem_lines)
-                + "\n\nGunakan informasi ini untuk personalisasi jawaban. "
+                "\n\nGunakan informasi ini untuk personalisasi jawaban. "
                 "Simpan fakta baru yang penting dengan tool save_memory."
             )
 
@@ -185,20 +218,28 @@ class AgentManager:
 
     # --- Agent Delegation ---
 
+    MAX_DELEGATION_DEPTH = 2
+
     async def delegate(self, from_agent_id: str, to_agent_id: str,
                        user_id: str, task: str,
                        chat_id: str = "",
-                       remaining_budget: int = 0) -> tuple[str, int]:
+                       remaining_budget: int = 0,
+                       depth: int = 1) -> tuple[str, int]:
         """Delegate a task from one agent to another.
 
         Runs a tool execution loop so the target agent can use its tools
         (generate_image, run_bash, etc.) before responding.
+        Child agents have restricted toolsets (no delegate, no memory writes).
+        Max depth=2 to prevent recursive delegation chains.
 
         Returns (response_text, iterations_used) for shared budget tracking.
         """
         import json
         from core import completion
         from core.tools import get_agent_tools, execute_tool
+
+        if depth > self.MAX_DELEGATION_DEPTH:
+            return f"[Error: max delegation depth ({self.MAX_DELEGATION_DEPTH}) exceeded]", 0
 
         target_agent = self.config.get_agent(to_agent_id)
         if not target_agent:
@@ -224,7 +265,7 @@ class AgentManager:
             Message(role="user", content=task),
         ]
 
-        tools = get_agent_tools(to_agent_id)
+        tools = get_agent_tools(to_agent_id, is_delegated=True)
         # Child gets min of its own budget or remaining parent budget
         child_budget = target_agent.max_iterations
         if remaining_budget > 0:

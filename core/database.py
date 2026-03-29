@@ -77,6 +77,7 @@ class Database:
                 user_id TEXT NOT NULL,
                 content TEXT NOT NULL,
                 category TEXT DEFAULT 'general',
+                memory_type TEXT DEFAULT 'user',
                 agent_id TEXT DEFAULT '',
                 created_at REAL NOT NULL
             );
@@ -101,7 +102,17 @@ class Database:
             );
         """)
         self.conn.commit()
+        self._migrate()
         log.info(f"Database initialized: {self.path}")
+
+    def _migrate(self):
+        """Run schema migrations for existing databases."""
+        # Add memory_type column if missing
+        cols = [r[1] for r in self.conn.execute("PRAGMA table_info(memories)").fetchall()]
+        if "memory_type" not in cols:
+            self.conn.execute("ALTER TABLE memories ADD COLUMN memory_type TEXT DEFAULT 'user'")
+            self.conn.commit()
+            log.info("Migration: added memory_type column to memories")
 
     def save_message(self, session_key: str, agent_id: str, user_id: str,
                      role: str, content: str, model: str = "", provider: str = ""):
@@ -209,8 +220,11 @@ class Database:
     # --- Memory ---
 
     def save_memory(self, user_id: str, content: str, category: str = "general",
-                    agent_id: str = ""):
-        """Save a fact/memory about a user."""
+                    agent_id: str = "", memory_type: str = "user"):
+        """Save a fact/memory about a user.
+
+        memory_type: 'user' (user facts/preferences) or 'agent' (agent observations/conventions)
+        """
         with self._lock:
             # Avoid exact duplicates
             existing = self.conn.execute(
@@ -221,9 +235,9 @@ class Database:
                 return existing["id"]
 
             self.conn.execute(
-                "INSERT INTO memories (user_id, content, category, agent_id, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (user_id, content, category, agent_id, time.time()),
+                "INSERT INTO memories (user_id, content, category, memory_type, agent_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, content, category, memory_type, agent_id, time.time()),
             )
             self.conn.commit()
             return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
