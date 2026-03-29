@@ -24,8 +24,10 @@ class WeatherSkill(Skill):
                 )
                 data = resp.json()
 
-            current = data.get("current_condition", [{}])[0]
-            area = data.get("nearest_area", [{}])[0]
+            cc = data.get("current_condition") or [{}]
+            current = cc[0] if cc else {}
+            na = data.get("nearest_area") or [{}]
+            area = na[0] if na else {}
 
             city = area.get("areaName", [{}])[0].get("value", location)
             country = area.get("country", [{}])[0].get("value", "")
@@ -52,7 +54,9 @@ class WeatherSkill(Skill):
                     date = day.get("date", "")
                     max_t = day.get("maxtempC", "?")
                     min_t = day.get("mintempC", "?")
-                    desc_f = day.get("hourly", [{}])[4].get("weatherDesc", [{}])[0].get("value", "")
+                    hourly = day.get("hourly", [])
+                    mid = hourly[min(4, len(hourly) - 1)] if hourly else {}
+                    desc_f = (mid.get("weatherDesc") or [{}])[0].get("value", "")
                     output += f"\n  {date}: {min_t}-{max_t}°C, {desc_f}"
 
             return SkillResult(success=True, output=output)

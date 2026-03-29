@@ -42,8 +42,12 @@ class Scheduler:
 
     def add_job(self, name: str, interval: int, func: Callable, enabled: bool = True):
         """Register a scheduled job."""
+        if interval <= 0:
+            log.warning(f"Scheduler: ignoring '{name}' with invalid interval={interval}")
+            return
         self._jobs[name] = ScheduledJob(
             name=name, interval=interval, func=func, enabled=enabled,
+            last_run=time.time(),  # respect interval on first run
         )
         log.info(f"Scheduler: registered '{name}' (every {interval}s)")
 

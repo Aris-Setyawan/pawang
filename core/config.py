@@ -23,7 +23,13 @@ _ENV_PATTERN = re.compile(r"\$\{(\w+)\}")
 def _resolve_env(value):
     """Replace ${VAR} with environment variable value."""
     if isinstance(value, str):
-        return _ENV_PATTERN.sub(lambda m: os.environ.get(m.group(1), ""), value)
+        def _replace(m):
+            val = os.environ.get(m.group(1), "")
+            if not val:
+                from core.logger import log
+                log.warning(f"Config: env var ${{{m.group(1)}}} not set")
+            return val
+        return _ENV_PATTERN.sub(_replace, value)
     if isinstance(value, dict):
         return {k: _resolve_env(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -118,7 +124,14 @@ class PawangConfig:
 
 def load_config(path: Path = CONFIG_PATH) -> PawangConfig:
     """Load and parse config.yaml with env var resolution."""
-    raw = yaml.safe_load(path.read_text())
+    try:
+        raw = yaml.safe_load(path.read_text())
+    except FileNotFoundError:
+        raise RuntimeError(f"Config file not found: {path}")
+    except yaml.YAMLError as e:
+        raise RuntimeError(f"Invalid YAML in config: {e}")
+    if not raw or not isinstance(raw, dict):
+        raise RuntimeError(f"Config file is empty or invalid: {path}")
     raw = _resolve_env(raw)
 
     gateway = GatewayConfig(**raw.get("gateway", {}))

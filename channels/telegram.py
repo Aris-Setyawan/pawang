@@ -49,7 +49,10 @@ class TelegramBot:
         """Restore user settings from DB."""
         db = get_db()
         for s in db.get_all_user_settings():
-            uid = int(s["user_id"])
+            try:
+                uid = int(s["user_id"])
+            except (ValueError, TypeError):
+                continue
             if s["agent_id"]:
                 self._user_agent[uid] = s["agent_id"]
             if s["thinking_mode"]:
@@ -362,7 +365,10 @@ class TelegramBot:
             await query.edit_message_reply_markup(reply_markup=keyboard)
 
         elif data.startswith("set:think:"):
-            level = data.split(":")[2]
+            parts = data.split(":")
+            if len(parts) < 3:
+                return
+            level = parts[2]
             if level in ("low", "medium", "high", "max"):
                 self._thinking_mode[user_id] = level
                 self._save_settings(user_id)
@@ -1042,7 +1048,7 @@ class TelegramBot:
                 self._update_env_key(provider_name, new_key)
                 from core.completion import reset_providers
                 reset_providers()
-                masked = new_key[:8] + "..." + new_key[-4:] if len(new_key) > 12 else new_key
+                masked = new_key[:8] + "..." + new_key[-4:] if len(new_key) > 12 else "***"
                 keyboard = self._build_provider_detail_keyboard(provider_name)
                 await update.message.chat.send_message(
                     f"API key {provider_name} updated!\nKey: {masked}",
