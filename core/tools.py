@@ -299,6 +299,16 @@ def get_agent_tools(agent_id: str) -> list[dict]:
 
 # --- Tool Execution ---
 
+def _safe_env() -> dict:
+    """Return environment with only necessary variables for scripts."""
+    safe_keys = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL",
+                 "TELEGRAM_BOT_TOKEN", "TMPDIR", "TZ"}
+    env = {k: v for k, v in os.environ.items()
+           if k in safe_keys or k.endswith("_API_KEY") or k.endswith("_KEY")}
+    env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+    return env
+
+
 async def _run_script(script_name: str, args: list[str], timeout: int = 120) -> ToolResult:
     """Run a script from the scripts directory."""
     script_path = os.path.join(SCRIPTS_DIR, script_name)
@@ -310,7 +320,7 @@ async def _run_script(script_name: str, args: list[str], timeout: int = 120) -> 
             "bash", script_path, *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ},
+            env=_safe_env(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         output = stdout.decode(errors="replace")
@@ -329,11 +339,23 @@ async def _run_script(script_name: str, args: list[str], timeout: int = 120) -> 
 
 async def _run_bash(command: str, timeout: int = 30) -> ToolResult:
     """Run an arbitrary bash command."""
+    import re
     # Safety: block dangerous commands
-    dangerous = ["rm -rf /", "mkfs", "dd if=", "> /dev/sd", ":(){ :|:& };:"]
+    dangerous = [
+        "rm -rf /", "rm -rf /*", "mkfs", "dd if=", "> /dev/sd",
+        ":(){ :|:& };:", "chmod -R 777 /", "chown -R", "shutdown",
+        "reboot", "init 0", "init 6", "halt", "poweroff",
+    ]
+    # Normalize whitespace for bypass prevention
+    cmd_normalized = re.sub(r'\s+', ' ', command.strip())
     for d in dangerous:
-        if d in command:
-            return ToolResult(name="bash", output=f"Blocked: dangerous command", success=False)
+        if d in cmd_normalized:
+            return ToolResult(name="bash", output="Blocked: dangerous command", success=False)
+    # Block attempts to read sensitive files
+    sensitive = ["/etc/shadow", "/etc/gshadow", ".env", "credentials", "id_rsa"]
+    for s in sensitive:
+        if s in command and ("cat " in command or "head " in command or "tail " in command or "cp " in command):
+            return ToolResult(name="bash", output="Blocked: access to sensitive file", success=False)
 
     try:
         proc = await asyncio.create_subprocess_shell(

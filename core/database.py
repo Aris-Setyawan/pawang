@@ -194,8 +194,8 @@ class Database:
             "SUM(output_tokens) as total_output FROM usage"
         ).fetchone()
         return {
-            "messages": dict(row),
-            "usage": dict(usage),
+            "messages": dict(row) if row else {"total_messages": 0, "total_sessions": 0},
+            "usage": dict(usage) if usage else {"total_requests": 0, "total_input": 0, "total_output": 0},
         }
 
     # --- Memory ---

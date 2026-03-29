@@ -1129,7 +1129,7 @@ class TelegramBot:
             await tg_file.download_to_drive(tmp_path)
         except Exception as e:
             log.error(f"Voice download error: {e}")
-            await update.message.reply_text(f"Gagal download voice: {e}")
+            await update.message.reply_text("Gagal download voice message.")
             return
 
         # Transcribe
@@ -1137,7 +1137,7 @@ class TelegramBot:
             text = await transcribe(tmp_path)
         except Exception as e:
             log.error(f"Transcribe error: {e}")
-            await update.message.reply_text(f"Gagal transcribe voice: {e}")
+            await update.message.reply_text("Gagal transcribe voice message.")
             return
         finally:
             import os
