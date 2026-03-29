@@ -347,6 +347,132 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "python_exec",
+            "description": "Jalankan kode Python. Untuk kalkulasi, data processing, analisis, generate chart, regex, JSON parsing. Lebih aman dan powerful dari bash untuk tugas non-system.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Kode Python yang ingin dijalankan. Gunakan print() untuk output.",
+                    },
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_pdf",
+            "description": "Baca dan ekstrak teks dari file PDF. Untuk membaca dokumen, paper, laporan.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path ke file PDF",
+                    },
+                    "pages": {
+                        "type": "string",
+                        "description": "Range halaman (contoh: '1-5', '3', 'all'). Default: all",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "wikipedia",
+            "description": "Cari dan baca artikel Wikipedia. Untuk fakta, definisi, referensi pengetahuan umum.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Topik yang ingin dicari di Wikipedia",
+                    },
+                    "lang": {
+                        "type": "string",
+                        "description": "Bahasa Wikipedia: 'id' (Indonesia) atau 'en' (English). Default: en",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "translate",
+            "description": "Terjemahkan teks antar bahasa menggunakan Google Translate (gratis).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Teks yang ingin diterjemahkan",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Bahasa tujuan (contoh: 'id', 'en', 'ja', 'zh', 'ko', 'fr', 'de')",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Bahasa asal (opsional, auto-detect jika kosong)",
+                    },
+                },
+                "required": ["text", "target"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": "Hitung ekspresi matematika dengan presisi tinggi. Untuk aritmatika, konversi, persentase, statistik.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Ekspresi matematika (contoh: '15000 * 1.11', 'sqrt(144)', '2**10', 'sin(pi/4)')",
+                    },
+                },
+                "required": ["expression"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "code_search",
+            "description": "Cari teks/pattern di dalam file-file project. Seperti grep — untuk menemukan fungsi, variabel, string di codebase.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Teks atau regex yang dicari",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Direktori atau file untuk search (default: workspace/)",
+                    },
+                    "file_type": {
+                        "type": "string",
+                        "description": "Filter tipe file (contoh: '*.py', '*.js', '*.yaml')",
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
 ]
 
 
@@ -354,15 +480,25 @@ TOOL_DEFINITIONS = [
 
 # Which tools each agent can use
 AGENT_TOOLS = {
-    "agent1": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather", "save_memory", "recall_memories", "delete_memory"],
-    "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash", "file_read", "file_write"],
-    "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search"],
-    "agent4": ["run_bash", "send_file", "web_search", "file_read", "file_write", "file_search"],
+    "agent1": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather",
+               "save_memory", "recall_memories", "delete_memory",
+               "python_exec", "wikipedia", "translate", "calculator", "code_search"],
+    "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
+               "file_read", "file_write", "python_exec", "translate"],
+    "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search",
+               "python_exec", "wikipedia", "calculator", "read_pdf", "code_search"],
+    "agent4": ["run_bash", "send_file", "web_search", "file_read", "file_write", "file_search",
+               "python_exec", "code_search", "read_pdf"],
     # Backup agents mirror their primary
-    "agent5": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather", "save_memory", "recall_memories", "delete_memory"],
-    "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash", "file_read", "file_write"],
-    "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search"],
-    "agent8": ["run_bash", "send_file", "web_search", "file_read", "file_write", "file_search"],
+    "agent5": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather",
+               "save_memory", "recall_memories", "delete_memory",
+               "python_exec", "wikipedia", "translate", "calculator", "code_search"],
+    "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
+               "file_read", "file_write", "python_exec", "translate"],
+    "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search",
+               "python_exec", "wikipedia", "calculator", "read_pdf", "code_search"],
+    "agent8": ["run_bash", "send_file", "web_search", "file_read", "file_write", "file_search",
+               "python_exec", "code_search", "read_pdf"],
 }
 
 # Tools blocked for child agents during delegation
@@ -670,6 +806,36 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
         result = await web_fetch_async(url)
         return ToolResult(name="web_fetch", output=result, success=not result.startswith("Error"))
 
+    elif name == "python_exec":
+        code = arguments.get("code", "")
+        return await _run_python(code)
+
+    elif name == "read_pdf":
+        file_path = arguments.get("file_path", "")
+        pages = arguments.get("pages", "all")
+        return await _read_pdf(file_path, pages)
+
+    elif name == "wikipedia":
+        query = arguments.get("query", "")
+        lang = arguments.get("lang", "en")
+        return await _wikipedia_search(query, lang)
+
+    elif name == "translate":
+        text = arguments.get("text", "")
+        target = arguments.get("target", "en")
+        source = arguments.get("source", "")
+        return await _translate_text(text, target, source)
+
+    elif name == "calculator":
+        expression = arguments.get("expression", "")
+        return _calculate(expression)
+
+    elif name == "code_search":
+        pattern = arguments.get("pattern", "")
+        path = arguments.get("path", "")
+        file_type = arguments.get("file_type", "")
+        return await _code_search(pattern, path, file_type)
+
     elif name.startswith("mcp_"):
         # MCP tool call — route to MCP manager
         try:
@@ -683,3 +849,199 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
 
     else:
         return ToolResult(name=name, output=f"Unknown tool: {name}", success=False)
+
+
+# --- New Tool Implementations ---
+
+async def _run_python(code: str, timeout: int = 30) -> ToolResult:
+    """Run Python code in a subprocess. Captures stdout + stderr."""
+    if not code.strip():
+        return ToolResult(name="python_exec", output="Error: kode kosong", success=False)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "python3", "-c", code,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd="/root/pawang/workspace",
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        output = stdout.decode(errors="replace")
+        if stderr:
+            err = stderr.decode(errors="replace")
+            output = output + "\n[stderr]\n" + err if output else err
+        return ToolResult(
+            name="python_exec",
+            output=output[:4000] if output else "(no output)",
+            success=proc.returncode == 0,
+        )
+    except asyncio.TimeoutError:
+        return ToolResult(name="python_exec", output=f"Timeout after {timeout}s", success=False)
+    except Exception as e:
+        return ToolResult(name="python_exec", output=str(e), success=False)
+
+
+async def _read_pdf(file_path: str, pages: str = "all") -> ToolResult:
+    """Extract text from PDF using Python (pymupdf or pdfplumber fallback)."""
+    from pathlib import Path
+    resolved = Path(file_path).resolve()
+    if not resolved.exists():
+        return ToolResult(name="read_pdf", output=f"File not found: {file_path}", success=False)
+    if not str(resolved).endswith(".pdf"):
+        return ToolResult(name="read_pdf", output="Error: file bukan PDF", success=False)
+
+    # Use python subprocess to extract text
+    code = f'''
+import sys
+try:
+    import fitz  # pymupdf
+    doc = fitz.open("{resolved}")
+    pages_range = "{pages}"
+    if pages_range == "all":
+        page_nums = range(len(doc))
+    elif "-" in pages_range:
+        start, end = pages_range.split("-", 1)
+        page_nums = range(int(start)-1, min(int(end), len(doc)))
+    else:
+        page_nums = [int(pages_range)-1]
+    text = ""
+    for i in page_nums:
+        if 0 <= i < len(doc):
+            text += f"--- Page {{i+1}} ---\\n"
+            text += doc[i].get_text() + "\\n"
+    print(f"PDF: {{len(doc)}} pages, extracted {{len(page_nums)}} pages")
+    print(text[:8000])
+except ImportError:
+    try:
+        import subprocess
+        result = subprocess.run(["pdftotext", "{resolved}", "-"], capture_output=True, text=True, timeout=15)
+        if result.returncode == 0:
+            print(result.stdout[:8000])
+        else:
+            print("Error: pdftotext failed:", result.stderr)
+    except FileNotFoundError:
+        print("Error: install pymupdf (pip install pymupdf) or pdftotext for PDF support")
+'''
+    return await _run_python(code, timeout=20)
+
+
+async def _wikipedia_search(query: str, lang: str = "en") -> ToolResult:
+    """Search Wikipedia and return article summary."""
+    import httpx
+    if not query:
+        return ToolResult(name="wikipedia", output="Error: query kosong", success=False)
+    url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{query.replace(' ', '_')}"
+    headers = {"User-Agent": "Pawang/1.0 (https://github.com/Aris-Setyawan/pawang)"}
+    try:
+        async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+            r = await client.get(url, follow_redirects=True)
+            if r.status_code == 200:
+                data = r.json()
+                title = data.get("title", query)
+                extract = data.get("extract", "No content")
+                desc = data.get("description", "")
+                page_url = data.get("content_urls", {}).get("desktop", {}).get("page", "")
+                output = f"# {title}\n"
+                if desc:
+                    output += f"_{desc}_\n\n"
+                output += extract
+                if page_url:
+                    output += f"\n\nSource: {page_url}"
+                return ToolResult(name="wikipedia", output=output[:4000], success=True)
+            elif r.status_code == 404:
+                # Try search API
+                search_url = f"https://{lang}.wikipedia.org/w/api.php?action=opensearch&search={query}&limit=5&format=json"
+                sr = await client.get(search_url)
+                if sr.status_code == 200:
+                    data = sr.json()
+                    titles = data[1] if len(data) > 1 else []
+                    if titles:
+                        return ToolResult(
+                            name="wikipedia",
+                            output=f"Artikel '{query}' tidak ditemukan. Mungkin maksud:\n" + "\n".join(f"- {t}" for t in titles),
+                            success=True,
+                        )
+                return ToolResult(name="wikipedia", output=f"Artikel '{query}' tidak ditemukan di Wikipedia {lang}.", success=False)
+            else:
+                return ToolResult(name="wikipedia", output=f"Wikipedia API error: {r.status_code}", success=False)
+    except Exception as e:
+        return ToolResult(name="wikipedia", output=f"Error: {e}", success=False)
+
+
+async def _translate_text(text: str, target: str, source: str = "") -> ToolResult:
+    """Translate text using Google Translate (free, unofficial API)."""
+    import httpx
+    import urllib.parse
+    if not text:
+        return ToolResult(name="translate", output="Error: teks kosong", success=False)
+    src = source or "auto"
+    encoded = urllib.parse.quote(text[:3000])
+    url = (
+        f"https://translate.googleapis.com/translate_a/single"
+        f"?client=gtx&sl={src}&tl={target}&dt=t&q={encoded}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url)
+            if r.status_code == 200:
+                data = r.json()
+                translated = "".join(part[0] for part in data[0] if part[0])
+                detected = data[2] if len(data) > 2 else src
+                return ToolResult(
+                    name="translate",
+                    output=f"[{detected} -> {target}]\n{translated}",
+                    success=True,
+                )
+            return ToolResult(name="translate", output=f"Translation API error: {r.status_code}", success=False)
+    except Exception as e:
+        return ToolResult(name="translate", output=f"Error: {e}", success=False)
+
+
+def _calculate(expression: str) -> ToolResult:
+    """Evaluate math expression safely using Python's math module."""
+    import math
+    if not expression:
+        return ToolResult(name="calculator", output="Error: ekspresi kosong", success=False)
+    # Whitelist safe names
+    safe_names = {
+        k: v for k, v in math.__dict__.items()
+        if not k.startswith("_")
+    }
+    safe_names.update({
+        "abs": abs, "round": round, "min": min, "max": max,
+        "sum": sum, "len": len, "int": int, "float": float,
+        "pow": pow, "divmod": divmod,
+    })
+    try:
+        result = eval(expression, {"__builtins__": {}}, safe_names)
+        return ToolResult(name="calculator", output=f"{expression} = {result}", success=True)
+    except Exception as e:
+        return ToolResult(name="calculator", output=f"Error: {e}\nExpression: {expression}", success=False)
+
+
+async def _code_search(pattern: str, path: str = "", file_type: str = "") -> ToolResult:
+    """Search for text/pattern in files using grep."""
+    if not pattern:
+        return ToolResult(name="code_search", output="Error: pattern kosong", success=False)
+    search_path = path or "/root/pawang/workspace"
+    # Build grep command
+    cmd = ["grep", "-rn", "--color=never", "-I"]
+    if file_type:
+        cmd.extend(["--include", file_type])
+    cmd.extend(["-m", "50", pattern, search_path])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        output = stdout.decode(errors="replace")
+        if not output:
+            return ToolResult(name="code_search", output=f"No matches for '{pattern}' in {search_path}", success=True)
+        lines = output.strip().split("\n")
+        header = f"Found {len(lines)} match(es) for '{pattern}':\n\n"
+        return ToolResult(name="code_search", output=(header + output)[:4000], success=True)
+    except asyncio.TimeoutError:
+        return ToolResult(name="code_search", output="Timeout", success=False)
+    except Exception as e:
+        return ToolResult(name="code_search", output=str(e), success=False)
