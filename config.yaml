@@ -62,6 +62,13 @@ providers:
     api_format: openai
     models: []  # dynamic, fetched from API
 
+  kieai:
+    base_url: https://api.kie.ai/api/v1
+    api_key: ${KIEAI_API_KEY}
+    api_format: openai
+    models:
+      - flux-1.1-pro  # image generation
+
 agents:
   - id: agent1
     name: Santa
@@ -164,3 +171,10 @@ panel:
   auth:
     username: admin
     password: ${PANEL_PASSWORD}
+
+smart_routing:
+  enabled: true
+  cheap_provider: google
+  cheap_model: gemini-2.0-flash
+
+session_timeout: 14400  # 4 hours idle = auto-reset
