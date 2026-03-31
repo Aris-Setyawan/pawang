@@ -24,6 +24,7 @@ from channels.telegram import TelegramBot
 from core.health import HealthMonitor
 from core.scheduler import Scheduler
 from core.jobs import register_jobs
+from core.token_guard import init_token_guard, get_token_guard
 from panel.app import panel_routes
 from api.openai_server import api_routes
 
@@ -34,6 +35,7 @@ telegram_bot: TelegramBot = None
 health_monitor: HealthMonitor = None
 scheduler: Scheduler = None
 mcp_manager: MCPManager = None
+token_guard = None
 
 
 # --- HTTP API Routes ---
@@ -106,6 +108,12 @@ async def api_reload(request: Request):
         return JSONResponse({"status": "reloaded"})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+async def api_token_guard(request: Request):
+    """Token Guard status — spike detection + budget monitoring."""
+    guard = get_token_guard()
+    return JSONResponse(guard.get_status())
 
 
 # --- App Lifecycle ---
@@ -206,6 +214,13 @@ async def startup():
 
         approval_manager.set_notify(_approval_notify)
 
+    # Init Token Guard (spike detection + budget enforcement)
+    global token_guard
+    token_guard = init_token_guard(config)
+    if telegram_bot and telegram_bot.app and config.telegram.admin_chat_id:
+        token_guard.set_notify(_notify)
+    log.info("Token Guard initialized")
+
     log.info(f"Pawang ready on port {config.gateway.port}")
     await hooks.emit("startup", providers=list(config.providers.keys()),
                       agents=[a.id for a in config.agents])
@@ -245,6 +260,7 @@ routes = [
     Route("/api/sessions", api_sessions),
     Route("/api/jobs", api_jobs),
     Route("/api/reload", api_reload, methods=["POST"]),
+    Route("/api/token-guard", api_token_guard),
 ] + api_routes + panel_routes
 
 app = Starlette(routes=routes, lifespan=lifespan)

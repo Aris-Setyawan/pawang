@@ -1,6 +1,7 @@
 """Agent Manager — manages agent sessions, conversation history, and delegation."""
 
 import time
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -220,12 +221,35 @@ class AgentManager:
         model = session.active_model or agent.model
         return provider, model
 
-    def switch_model(self, session: Session, provider: str, model: str):
+    def switch_model(self, session: Session, provider: str, model: str,
+                     persist: bool = False):
+        """Switch model for a session.
+
+        Args:
+            persist: If True, also update agent default config and save to config.yaml.
+        """
         session.active_provider = provider
         session.active_model = model
         db = get_db()
         db.save_session_model(session.key, provider, model)
         log.info(f"Session {session.key} switched to {provider}/{model}")
+
+        if persist:
+            self._persist_agent_model(session.agent_id, provider, model)
+
+    def _persist_agent_model(self, agent_id: str, provider: str, model: str):
+        """Update agent default config and persist to config.yaml."""
+        agent = self.config.get_agent(agent_id)
+        if not agent:
+            return
+        agent.provider = provider
+        agent.model = model
+        try:
+            from core.config import save_config
+            save_config(self.config)
+            log.info(f"Persisted {agent_id} default -> {provider}/{model}")
+        except Exception as e:
+            log.error(f"Failed to persist config: {e}")
 
     def refresh_system_prompt(self, agent_id: str, user_id: str):
         """Rebuild system prompt (e.g. after rename) and update cached session."""
@@ -289,21 +313,58 @@ class AgentManager:
 
     MAX_DELEGATION_DEPTH = 2
 
+    # --- Loop/stuck detection thresholds ---
+    LOOP_THRESHOLD = 3        # same tool+args repeated N times = loop
+    ERROR_STREAK_LIMIT = 4    # consecutive errors = stuck
+    STALE_ITERATIONS = 5      # no new file created/modified in N iterations = stale
+
+    def _detect_loop(self, history: list) -> Optional[str]:
+        """Detect if agent is stuck in a loop (same tool+args repeated)."""
+        if len(history) < self.LOOP_THRESHOLD:
+            return None
+        recent = history[-self.LOOP_THRESHOLD:]
+        signatures = [f"{h['tool']}:{h['preview']}" for h in recent]
+        if len(set(signatures)) == 1:
+            return f"Loop detected: {recent[0]['preview']} repeated {self.LOOP_THRESHOLD}x"
+        return None
+
+    def _detect_error_streak(self, history: list) -> Optional[str]:
+        """Detect consecutive tool failures."""
+        if len(history) < self.ERROR_STREAK_LIMIT:
+            return None
+        recent = history[-self.ERROR_STREAK_LIMIT:]
+        if all(not h["ok"] for h in recent):
+            return f"Error streak: {self.ERROR_STREAK_LIMIT} consecutive failures"
+        return None
+
+    def _get_backup_agent(self, agent_id: str) -> Optional[str]:
+        """Get backup agent ID from health failover chain."""
+        try:
+            from main import health_monitor
+            if health_monitor:
+                return health_monitor.get_failover_agent(agent_id)
+        except ImportError:
+            pass
+        # Fallback: manual map from config
+        for chain in self.config.health.fallback_chain:
+            if len(chain) >= 2 and chain[0] == agent_id:
+                return chain[1]
+        return None
+
     async def delegate(self, from_agent_id: str, to_agent_id: str,
                        user_id: str, task: str,
                        chat_id: str = "",
                        remaining_budget: int = 0,
-                       depth: int = 1) -> tuple[str, int]:
-        """Delegate a task from one agent to another.
+                       depth: int = 1,
+                       on_progress=None,
+                       check_interrupt=None) -> tuple[str, int]:
+        """Delegate a task with supervision: loop/stuck detection + backup escalation.
 
-        Runs a tool execution loop so the target agent can use its tools
-        (generate_image, run_bash, etc.) before responding.
-        Child agents have restricted toolsets (no delegate, no memory writes).
-        Max depth=2 to prevent recursive delegation chains.
+        If the target agent gets stuck (loop, error streak), automatically
+        escalates to its backup agent to continue/fix the work.
 
         Returns (response_text, iterations_used) for shared budget tracking.
         """
-        import json
         from core import completion
         from core.tools import get_agent_tools, execute_tool
 
@@ -314,7 +375,69 @@ class AgentManager:
         if not target_agent:
             return f"[Error: Agent '{to_agent_id}' not found]", 0
 
-        # Build system prompt from agent's prompt file
+        result_text, iters, status = await self._run_delegated_loop(
+            from_agent_id, to_agent_id, target_agent, user_id, task,
+            chat_id, remaining_budget, on_progress, check_interrupt,
+        )
+
+        # If stuck/loop, escalate to backup agent
+        if status in ("loop", "error_streak", "budget_exhausted"):
+            backup_id = self._get_backup_agent(to_agent_id)
+            if backup_id:
+                backup_agent = self.config.get_agent(backup_id)
+                if backup_agent:
+                    log.warning(f"Delegation escalation: {to_agent_id} {status} -> "
+                                f"backup {backup_id} ({backup_agent.name})")
+
+                    # Tell backup what happened and continue
+                    escalation_task = (
+                        f"Agent {target_agent.name} ({to_agent_id}) was working on this task "
+                        f"but got stuck ({status}).\n\n"
+                        f"Original task:\n{task}\n\n"
+                        f"What {target_agent.name} did so far:\n{result_text}\n\n"
+                        f"Please continue or fix the work. Focus on completing the task."
+                    )
+
+                    if on_progress:
+                        try:
+                            await on_progress(
+                                f"⚠️ {target_agent.name} stuck ({status})\n"
+                                f"🔄 Escalating to {backup_agent.name}..."
+                            )
+                        except Exception:
+                            pass
+
+                    backup_budget = remaining_budget - iters if remaining_budget > 0 else 0
+                    backup_text, backup_iters, _ = await self._run_delegated_loop(
+                        from_agent_id, backup_id, backup_agent, user_id,
+                        escalation_task, chat_id, backup_budget,
+                        on_progress, check_interrupt,
+                    )
+                    total_iters = iters + backup_iters
+                    combined = (
+                        f"[{target_agent.name} stuck ({status}), "
+                        f"{backup_agent.name} took over]\n\n{backup_text}"
+                    )
+                    return combined, total_iters
+
+        return result_text, iters
+
+    async def _run_delegated_loop(
+        self, from_agent_id: str, to_agent_id: str,
+        target_agent: AgentConfig, user_id: str, task: str,
+        chat_id: str, remaining_budget: int,
+        on_progress=None, check_interrupt=None,
+    ) -> tuple[str, int, str]:
+        """Core delegation tool loop with supervision.
+
+        Returns (response_text, iterations_used, status).
+        Status: "ok", "interrupted", "loop", "error_streak", "budget_exhausted", "error".
+        """
+        from core import completion
+        from core.tools import get_agent_tools, execute_tool
+        from channels.telegram import _get_tool_preview, _get_output_snippet
+
+        # Build system prompt
         system_content = (
             f"You are {target_agent.name}. Another agent has delegated a task to you. "
             f"Respond concisely and directly to the task."
@@ -335,13 +458,20 @@ class AgentManager:
         ]
 
         tools = get_agent_tools(to_agent_id, is_delegated=True)
-        # Child gets min of its own budget or remaining parent budget
         child_budget = target_agent.max_iterations
         if remaining_budget > 0:
             child_budget = min(child_budget, remaining_budget)
 
+        child_history = []
+        start_time = time.time()
+
         try:
             for i in range(child_budget):
+                # Check interrupt
+                if check_interrupt and check_interrupt():
+                    summary = self._build_child_summary(to_agent_id, child_history, "interrupted")
+                    return summary, i + 1, "interrupted"
+
                 response = await completion.complete(
                     config=self.config,
                     provider_name=target_agent.provider,
@@ -353,10 +483,9 @@ class AgentManager:
                 )
 
                 if not response.tool_calls:
-                    # No tools called — final text response
                     log.info(f"Delegation: {from_agent_id} -> {to_agent_id} OK "
-                             f"({i + 1} iterations)")
-                    return response.text, i + 1
+                             f"({i + 1} iterations, {time.time() - start_time:.0f}s)")
+                    return response.text, i + 1, "ok"
 
                 # Add assistant message with tool_calls
                 raw_tc = [
@@ -369,22 +498,88 @@ class AgentManager:
                     tool_calls=raw_tc,
                 ))
 
-                # Execute each tool
+                # Execute each tool with progress
                 for tc in response.tool_calls:
-                    log.info(f"Delegation tool: {to_agent_id} -> {tc.name}")
                     try:
                         args = json.loads(tc.arguments)
                     except json.JSONDecodeError:
                         args = {}
+
+                    preview = _get_tool_preview(tc.name, args)
+                    elapsed = int(time.time() - start_time)
+                    log.info(f"Delegation tool: {to_agent_id} -> {preview} ({elapsed}s)")
+
+                    # Progress with timing
+                    if on_progress:
+                        recent = child_history[-5:]
+                        lines = []
+                        for h in recent:
+                            icon = "✅" if h["ok"] else "❌"
+                            line = f"{icon} {h['preview']}"
+                            if h.get("output"):
+                                line += f"\n   → {h['output']}"
+                            lines.append(line)
+                        lines.append(f"🔄 {preview}")
+                        progress_text = (
+                            f"[{i + 1}/{child_budget}] {target_agent.name} "
+                            f"({elapsed}s):\n" + "\n".join(lines)
+                        )
+                        try:
+                            await on_progress(progress_text)
+                        except Exception:
+                            pass
+
                     result = await execute_tool(tc.name, args, chat_id,
-                                                       user_id=user_id, agent_id=to_agent_id)
+                                                user_id=user_id, agent_id=to_agent_id)
                     messages.append(Message(
                         role="tool", content=result.output,
                         tool_call_id=tc.id, name=tc.name,
                     ))
 
-            return f"[Error: too many tool iterations in delegation (budget={child_budget})]", child_budget
+                    snippet = _get_output_snippet(tc.name, result.output, result.success)
+                    child_history.append({
+                        "preview": preview,
+                        "output": snippet,
+                        "ok": result.success,
+                        "tool": tc.name,
+                    })
+
+                # --- Supervision checks after each iteration ---
+
+                # Loop detection
+                loop_msg = self._detect_loop(child_history)
+                if loop_msg:
+                    log.warning(f"Delegation supervision: {to_agent_id} — {loop_msg}")
+                    summary = self._build_child_summary(to_agent_id, child_history, loop_msg)
+                    return summary, i + 1, "loop"
+
+                # Error streak detection
+                err_msg = self._detect_error_streak(child_history)
+                if err_msg:
+                    log.warning(f"Delegation supervision: {to_agent_id} — {err_msg}")
+                    summary = self._build_child_summary(to_agent_id, child_history, err_msg)
+                    return summary, i + 1, "error_streak"
+
+                # Check interrupt after tools
+                if check_interrupt and check_interrupt():
+                    summary = self._build_child_summary(to_agent_id, child_history, "interrupted")
+                    return summary, i + 1, "interrupted"
+
+            summary = self._build_child_summary(to_agent_id, child_history, "budget_exhausted")
+            return summary, child_budget, "budget_exhausted"
 
         except Exception as e:
             log.error(f"Delegation failed: {from_agent_id} -> {to_agent_id}: {e}")
-            return f"[Delegation error: {e}]", 0
+            return f"[Delegation error: {e}]", 0, "error"
+
+    @staticmethod
+    def _build_child_summary(agent_id: str, history: list, reason: str) -> str:
+        """Build a summary of what the child agent did before stopping."""
+        lines = [f"[{reason}] Agent {agent_id} — {len(history)} tools executed:"]
+        for h in history:
+            icon = "✅" if h["ok"] else "❌"
+            line = f"  {icon} {h['preview']}"
+            if h.get("output"):
+                line += f"\n     → {h['output']}"
+            lines.append(line)
+        return "\n".join(lines)

@@ -24,6 +24,21 @@
   --sans:      'DM Sans', sans-serif;
 }
 
+/* Light theme */
+body.light {
+  --bg:        #f5f7fa;
+  --surface:   #ffffff;
+  --surface2:  #eef1f6;
+  --border:    #d0d7de;
+  --accent:    #00875a;
+  --accent2:   #0066cc;
+  --warn:      #d35400;
+  --danger:    #cc2244;
+  --success:   #00875a;
+  --text:      #24292f;
+  --text-dim:  #6e7781;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
@@ -418,6 +433,9 @@ body {
     <div class="nav-item active" data-tab="status">
       <span class="icon">&#9673;</span> System Status
     </div>
+    <div class="nav-item" data-tab="providers">
+      <span class="icon">&#9729;</span> Providers
+    </div>
     <div class="nav-item" data-tab="keys">
       <span class="icon">&#11045;</span> API Keys
     </div>
@@ -426,6 +444,9 @@ body {
     </div>
     <div class="nav-item" data-tab="usage">
       <span class="icon">&#9635;</span> Usage Stats
+    </div>
+    <div class="nav-item" data-tab="tokenguard">
+      <span class="icon">&#128737;</span> Token Guard
     </div>
     <div class="nav-item" data-tab="settings">
       <span class="icon">&#9881;</span> Settings
@@ -465,6 +486,80 @@ body {
       <div style="margin-top:16px;display:flex;gap:10px">
         <button class="btn btn-ghost btn-sm" onclick="loadStatus()">Refresh</button>
         <button class="btn btn-ghost btn-sm" onclick="runHealthCheck()">Run Health Check</button>
+      </div>
+    </section>
+
+    <!-- PROVIDERS -->
+    <section class="section" id="tab-providers">
+      <div class="section-title">Provider Management</div>
+
+      <!-- Active Providers -->
+      <div class="card">
+        <div class="card-title">Active Providers</div>
+        <table class="data-table" id="provider-table">
+          <thead><tr>
+            <th>Provider</th><th>Base URL</th><th>Format</th><th>Models</th><th>API Key</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="provider-rows"></tbody>
+        </table>
+      </div>
+
+      <!-- Add from Template -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Quick Add — Provider Templates</div>
+        <div id="template-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px"></div>
+      </div>
+
+      <!-- Add Custom -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Add Custom Provider</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label style="font-size:12px;color:var(--text-dim)">Provider ID</label>
+            <input id="custom-prov-id" class="input" placeholder="e.g. myprovider">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-dim)">Base URL</label>
+            <input id="custom-prov-url" class="input" placeholder="https://api.example.com/v1">
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-dim)">API Format</label>
+            <select id="custom-prov-format" class="input">
+              <option value="openai">OpenAI Compatible</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="gemini">Gemini</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-dim)">API Key</label>
+            <input id="custom-prov-key" class="input" type="password" placeholder="sk-...">
+          </div>
+          <div style="grid-column:span 2">
+            <label style="font-size:12px;color:var(--text-dim)">Models (comma-separated)</label>
+            <input id="custom-prov-models" class="input" placeholder="model-a, model-b, model-c">
+          </div>
+          <div style="grid-column:span 2">
+            <label style="font-size:12px;color:var(--text-dim)">Supported Methods <span style="color:#666">(opsional — referensi saja)</span></label>
+            <div style="display:flex;gap:16px;margin-top:6px;flex-wrap:wrap">
+              <label style="font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer">
+                <input type="checkbox" id="custom-prov-method-sdk" value="sdk"> SDK
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer">
+                <input type="checkbox" id="custom-prov-method-python" value="python"> Python
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer">
+                <input type="checkbox" id="custom-prov-method-nodejs" value="nodejs"> Node.js
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer">
+                <input type="checkbox" id="custom-prov-method-openai" value="openai"> OpenAI Compat
+              </label>
+              <label style="font-size:13px;display:flex;align-items:center;gap:4px;cursor:pointer">
+                <input type="checkbox" id="custom-prov-method-curl" value="curl"> cURL
+              </label>
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="addCustomProvider()">Add Custom Provider</button>
       </div>
     </section>
 
@@ -543,6 +638,8 @@ body {
             <thead>
               <tr style="color:var(--text-dim);border-bottom:1px solid var(--border)">
                 <th style="text-align:left;padding:8px 6px">Agent</th>
+                <th style="text-align:left;padding:8px 6px">Name</th>
+                <th style="text-align:left;padding:8px 6px">Model</th>
                 <th style="text-align:right;padding:8px 6px">Requests</th>
                 <th style="text-align:right;padding:8px 6px">Users</th>
                 <th style="text-align:right;padding:8px 6px">Input Tok</th>
@@ -568,6 +665,8 @@ body {
                 <th style="text-align:right;padding:8px 6px">Calls</th>
                 <th style="text-align:right;padding:8px 6px">Input Tok</th>
                 <th style="text-align:right;padding:8px 6px">Output Tok</th>
+                <th style="text-align:right;padding:8px 6px">Avg Latency</th>
+                <th style="text-align:right;padding:8px 6px">Errors</th>
               </tr>
             </thead>
             <tbody id="u-stats-tbody">
@@ -575,6 +674,75 @@ body {
             </tbody>
           </table>
         </div>
+      </div>
+    </section>
+
+    <!-- TOKEN GUARD -->
+    <section class="section" id="tab-tokenguard">
+      <div class="section-title">Token Guard — Spike Detection & Budget Monitor</div>
+
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="summary-label">SPIKE THRESHOLD</div>
+          <div class="summary-value" id="tg-threshold" style="color:var(--warn)">--</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">SPIKES DETECTED</div>
+          <div class="summary-value" id="tg-spikes" style="color:var(--danger)">--</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">BUDGET BLOCKS</div>
+          <div class="summary-value" id="tg-blocks" style="color:var(--warn)">--</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">AVG WINDOW</div>
+          <div class="summary-value" id="tg-window" style="color:var(--accent2)">--</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Per-Agent Token Usage (Current Hour)</div>
+        <div style="overflow-x:auto;margin-top:12px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)">
+            <thead>
+              <tr style="color:var(--text-dim);border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:8px 6px">Agent</th>
+                <th style="text-align:right;padding:8px 6px">Current Hour</th>
+                <th style="text-align:right;padding:8px 6px">Avg/Hour</th>
+                <th style="text-align:right;padding:8px 6px">Budget</th>
+                <th style="text-align:right;padding:8px 6px">Remaining</th>
+                <th style="text-align:right;padding:8px 6px">Usage %</th>
+                <th style="text-align:right;padding:8px 6px">Requests</th>
+              </tr>
+            </thead>
+            <tbody id="tg-agent-tbody">
+              <tr><td colspan="7" style="color:var(--text-dim);padding:16px;text-align:center">Belum ada traffic</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Budget bars -->
+      <div class="card" style="margin-top:12px">
+        <div class="card-title">Budget Usage Bars</div>
+        <div id="tg-budget-bars" style="margin-top:12px">
+          <div style="color:var(--text-dim);font-family:var(--mono);font-size:11px">Belum ada data</div>
+        </div>
+      </div>
+
+      <!-- Editable budgets -->
+      <div class="card" style="margin-top:12px">
+        <div class="card-title">Edit Budgets (tokens/hour)</div>
+        <div id="tg-budget-edit" style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
+        </div>
+        <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+          <button class="btn btn-primary" onclick="saveTokenGuardBudgets()">Save Budgets</button>
+          <span style="font-size:11px;font-family:var(--mono);color:var(--text-dim)">0 = unlimited</span>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;display:flex;gap:10px">
+        <button class="btn btn-ghost btn-sm" onclick="loadTokenGuard()">Refresh</button>
       </div>
     </section>
 
@@ -607,6 +775,26 @@ body {
             <td style="color:var(--text)">X-Panel-Token / Basic Auth</td>
           </tr>
         </table>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-title">Theme</div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="setTheme('dark')">Dark</button>
+          <button class="btn btn-ghost btn-sm" onclick="setTheme('light')">Light</button>
+          <span id="theme-label" style="font-size:11px;font-family:var(--mono);color:var(--text-dim)">Current: dark</span>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-title">Change Panel Password</div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div class="field" style="flex:1;min-width:150px">
+            <label style="font-size:11px;color:var(--text-dim)">New Password</label>
+            <input type="password" id="new-password" placeholder="New password" style="font-family:var(--mono);font-size:12px;background:var(--surface);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:4px;width:100%">
+          </div>
+          <button class="btn btn-primary" onclick="changePassword()">Update Password</button>
+        </div>
       </div>
 
       <div class="card" style="margin-top:12px">
@@ -665,7 +853,8 @@ async function apiFetch(path, opts = {}) {
 const PROVIDER_LABELS = {
   google:'Gemini (Google)', openai:'OpenAI', openrouter:'OpenRouter',
   deepseek:'DeepSeek', modelstudio:'ModelStudio', anthropic:'Anthropic',
-  kieai:'Kie.ai',
+  kieai:'Kie.ai', sumopod:'SumoPod AI', groq:'Groq', together:'Together AI',
+  mistral:'Mistral AI',
 };
 function provLabel(id) { return PROVIDER_LABELS[id] || id.charAt(0).toUpperCase()+id.slice(1); }
 
@@ -704,8 +893,9 @@ document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.add('active');
     document.getElementById('tab-'+el.dataset.tab).classList.add('active');
     document.getElementById('page-title').textContent = el.textContent.trim();
-    // Auto-load usage on tab open
+    // Auto-load data on tab open
     if (el.dataset.tab === 'usage') loadUsage(168);
+    if (el.dataset.tab === 'tokenguard') loadTokenGuard();
   });
 });
 
@@ -766,10 +956,152 @@ async function loadConfig() {
     renderKeys();
     renderAgents();
     renderSettings();
+    loadProviders();
   } catch(e) {
     if (e.message !== 'Unauthorized')
       showToast('Failed to load config', 'err');
   }
+}
+
+// PROVIDERS
+async function loadProviders() {
+  try {
+    const tplData = await apiFetch('/providers/templates');
+    renderProviderTable();
+    renderTemplateGrid(tplData.templates || []);
+  } catch(e) { console.error('loadProviders:', e); }
+}
+
+function renderProviderTable() {
+  const provs = configData.providers || [];
+  const tbody = document.getElementById('provider-rows');
+  if (!tbody) return;
+  tbody.innerHTML = provs.map(p => {
+    const keyVal = configData.keys?.[p.id] || '';
+    const keyBadge = keyVal
+      ? `<span style="color:#98c379;font-size:11px">&#10003; set</span>`
+      : `<span style="color:#e06c75;font-size:11px">&#10007; missing</span>`;
+    return `<tr>
+      <td><strong>${provLabel(p.id)}</strong><br><span style="color:var(--text-dim);font-size:11px">${p.id}</span></td>
+      <td style="font-family:var(--mono);font-size:11px">${p.base_url || '—'}</td>
+      <td>${p.api_format}${p.methods && p.methods.length ? '<br><span style="font-size:10px;color:var(--text-dim)">' + p.methods.join(', ') + '</span>' : ''}</td>
+      <td>${p.model_count}</td>
+      <td>${keyBadge}</td>
+      <td>
+        <button class="btn btn-ghost btn-sm" onclick="editProvider('${p.id}')">Edit</button>
+        <button class="btn btn-ghost btn-sm" style="color:#e06c75" onclick="deleteProvider('${p.id}')">Delete</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderTemplateGrid(templates) {
+  const grid = document.getElementById('template-grid');
+  if (!grid) return;
+  grid.innerHTML = templates.map(t => {
+    if (t.installed) {
+      return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;opacity:0.5">
+        <div style="font-weight:600">${t.name}</div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:4px">${t.model_count} models</div>
+        <div style="font-size:11px;color:#98c379;margin-top:8px">&#10003; Already installed</div>
+      </div>`;
+    }
+    return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px">
+      <div style="font-weight:600">${t.name}</div>
+      <div style="font-size:11px;color:var(--text-dim);margin-top:4px">${t.model_count} models &middot; ${t.api_format}</div>
+      <div style="margin-top:8px">
+        <input class="input" type="password" id="tpl-key-${t.id}" placeholder="API Key" style="font-size:12px;margin-bottom:6px">
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn btn-primary btn-sm" onclick="addFromTemplate('${t.id}')">Install</button>
+          <a href="${t.docs_url}" target="_blank" style="font-size:11px;color:var(--accent)">Get API Key</a>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function addFromTemplate(templateId) {
+  const keyInput = document.getElementById(`tpl-key-${templateId}`);
+  const apiKey = keyInput ? keyInput.value.trim() : '';
+  try {
+    await apiFetch('/providers/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ id: templateId, template: templateId, api_key: apiKey })
+    });
+    showToast(`Provider ${templateId} added!`);
+    configData = await apiFetch('/config');
+    loadProviders();
+    renderKeys();
+  } catch(e) { showToast('Failed: ' + e.message, 'err'); }
+}
+
+async function addCustomProvider() {
+  const id = document.getElementById('custom-prov-id').value.trim().toLowerCase();
+  const url = document.getElementById('custom-prov-url').value.trim();
+  const fmt = document.getElementById('custom-prov-format').value;
+  const key = document.getElementById('custom-prov-key').value.trim();
+  const modelsStr = document.getElementById('custom-prov-models').value.trim();
+  const models = modelsStr ? modelsStr.split(',').map(m => m.trim()).filter(Boolean) : [];
+  const methods = ['sdk','python','nodejs','openai','curl']
+    .filter(m => document.getElementById('custom-prov-method-' + m)?.checked);
+  if (!id || !url) { showToast('Provider ID and Base URL required', 'err'); return; }
+  try {
+    await apiFetch('/providers/add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ id, base_url: url, api_format: fmt, api_key: key, models, methods })
+    });
+    showToast(`Custom provider '${id}' added!`);
+    // Clear form
+    document.getElementById('custom-prov-id').value = '';
+    document.getElementById('custom-prov-url').value = '';
+    document.getElementById('custom-prov-key').value = '';
+    document.getElementById('custom-prov-models').value = '';
+    ['sdk','python','nodejs','openai','curl'].forEach(m => {
+      const cb = document.getElementById('custom-prov-method-' + m);
+      if (cb) cb.checked = false;
+    });
+    configData = await apiFetch('/config');
+    loadProviders();
+    renderKeys();
+  } catch(e) { showToast('Failed: ' + e.message, 'err'); }
+}
+
+async function editProvider(pid) {
+  const prov = (configData.providers || []).find(p => p.id === pid);
+  if (!prov) return;
+  const models = (configData.models || [])
+    .filter(m => m.startsWith(pid + '/'))
+    .map(m => m.slice(pid.length + 1));
+  const newModels = prompt(`Edit models for ${provLabel(pid)} (comma-separated):`, models.join(', '));
+  if (newModels === null) return;
+  const modelList = newModels.split(',').map(m => m.trim()).filter(Boolean);
+  try {
+    await apiFetch('/providers/edit', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ id: pid, models: modelList })
+    });
+    showToast(`Provider ${pid} updated!`);
+    configData = await apiFetch('/config');
+    loadProviders();
+  } catch(e) { showToast('Failed: ' + e.message, 'err'); }
+}
+
+async function deleteProvider(pid) {
+  if (!confirm(`Delete provider "${pid}"? This cannot be undone.`)) return;
+  try {
+    await apiFetch('/providers/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ id: pid })
+    });
+    showToast(`Provider ${pid} deleted`);
+    configData = await apiFetch('/config');
+    loadProviders();
+    renderKeys();
+  } catch(e) { showToast('Failed: ' + e.message, 'err'); }
 }
 
 // KEYS
@@ -851,6 +1183,18 @@ function renderAgents() {
           <label>Max Iterations</label>
           <input type="number" id="${a.id}-iter" value="${a.max_iterations || 25}" min="1" max="100">
         </div>
+        <div class="field" style="grid-column:span 2">
+          <label>Fallback Models <span style="color:#666;font-weight:normal">(provider/model, comma-separated)</span></label>
+          <input class="input" id="${a.id}-fallbacks" value="${(a.fallbacks||[]).join(', ')}" placeholder="e.g. openai/gpt-4.1, deepseek/deepseek-chat">
+        </div>
+        <div class="field">
+          <label>Chat Model <span style="color:#666;font-weight:normal">(opsional, cheap)</span></label>
+          <input class="input" id="${a.id}-chat-model" value="${a.chat_model||''}" placeholder="e.g. deepseek-chat">
+        </div>
+        <div class="field">
+          <label>Chat Provider</label>
+          <input class="input" id="${a.id}-chat-provider" value="${a.chat_provider||''}" placeholder="e.g. deepseek">
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -877,6 +1221,9 @@ async function saveAgents() {
     const model = document.getElementById(a.id+'-model')?.value;
     const temp = document.getElementById(a.id+'-temp')?.value;
     const iter = document.getElementById(a.id+'-iter')?.value;
+    const fbStr = document.getElementById(a.id+'-fallbacks')?.value || '';
+    const chatModel = document.getElementById(a.id+'-chat-model')?.value || '';
+    const chatProv = document.getElementById(a.id+'-chat-provider')?.value || '';
     const cfg = { id: a.id };
     if (prov) cfg.provider = prov;
     if (model) {
@@ -885,6 +1232,9 @@ async function saveAgents() {
     }
     if (temp !== undefined) cfg.temperature = parseFloat(temp);
     if (iter !== undefined) cfg.max_iterations = parseInt(iter);
+    cfg.fallbacks = fbStr ? fbStr.split(',').map(f => f.trim()).filter(Boolean) : [];
+    cfg.chat_model = chatModel;
+    cfg.chat_provider = chatProv;
     return cfg;
   });
 
@@ -911,11 +1261,12 @@ async function loadUsage(hours) {
   try {
     const d = await apiFetch('/usage?hours=' + hours);
 
-    // Summary
+    // Summary — total is nested: {messages: {...}, usage: {total_requests, total_input, total_output}}
     const total = d.total || {};
-    document.getElementById('u-total-req').textContent = fmtNum(total.total_requests || d.error_rate?.total || 0);
-    document.getElementById('u-input-tok').textContent = fmtNum(total.total_input_tokens || 0);
-    document.getElementById('u-output-tok').textContent = fmtNum(total.total_output_tokens || 0);
+    const usage = total.usage || {};
+    document.getElementById('u-total-req').textContent = fmtNum(usage.total_requests || d.error_rate?.total || 0);
+    document.getElementById('u-input-tok').textContent = fmtNum(usage.total_input || 0);
+    document.getElementById('u-output-tok').textContent = fmtNum(usage.total_output || 0);
 
     const errRate = d.error_rate || {};
     const pct = errRate.total > 0 ? ((errRate.errors / errRate.total) * 100).toFixed(1) : '0.0';
@@ -925,35 +1276,49 @@ async function loadUsage(hours) {
     const atbody = document.getElementById('u-agent-tbody');
     const agentStats = d.agent_stats || [];
     if (!agentStats.length) {
-      atbody.innerHTML = '<tr><td colspan="5" style="color:var(--text-dim);padding:16px;text-align:center">Belum ada data</td></tr>';
+      atbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-dim);padding:16px;text-align:center">Belum ada data</td></tr>';
     } else {
-      atbody.innerHTML = agentStats.map((a, i) => `
-        <tr style="border-bottom:1px solid var(--border)">
+      atbody.innerHTML = agentStats.map((a, i) => {
+        const hasTraffic = (a.count || 0) > 0;
+        const dimStyle = hasTraffic ? '' : 'opacity:0.4;';
+        return `
+        <tr style="border-bottom:1px solid var(--border);${dimStyle}">
           <td style="padding:8px 6px">
             <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${AGENT_COLORS[i%AGENT_COLORS.length]};margin-right:6px"></span>
             ${a.agent_id || '--'}
           </td>
+          <td style="padding:8px 6px;color:var(--text)">${a.name || '--'}</td>
+          <td style="padding:8px 6px;color:var(--accent2);font-size:10px">${a.provider ? a.provider+'/' : ''}${a.model || '--'}</td>
           <td style="text-align:right;padding:8px 6px;color:var(--accent)">${a.count || 0}</td>
           <td style="text-align:right;padding:8px 6px;color:var(--text-dim)">${a.users || 0}</td>
           <td style="text-align:right;padding:8px 6px;color:var(--accent2)">${fmtNum(a.input_tokens || 0)}</td>
           <td style="text-align:right;padding:8px 6px;color:var(--success)">${fmtNum(a.output_tokens || 0)}</td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
     }
 
     // Stats table
     const stbody = document.getElementById('u-stats-tbody');
     const stats = d.stats || [];
     if (!stats.length) {
-      stbody.innerHTML = '<tr><td colspan="5" style="color:var(--text-dim);padding:16px;text-align:center">Belum ada data</td></tr>';
+      stbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-dim);padding:16px;text-align:center">Belum ada data</td></tr>';
     } else {
-      stbody.innerHTML = stats.map(s => `
-        <tr style="border-bottom:1px solid var(--border)">
+      stbody.innerHTML = stats.map(s => {
+        const calls = s.requests || s.count || 0;
+        const dimStyle = calls > 0 ? '' : 'opacity:0.4;';
+        const latency = s.avg_latency ? (s.avg_latency / 1000).toFixed(1) + 's' : '--';
+        const errors = s.errors || 0;
+        return `
+        <tr style="border-bottom:1px solid var(--border);${dimStyle}">
           <td style="padding:8px 6px;color:var(--accent2)">${s.provider || '--'}</td>
           <td style="padding:8px 6px">${s.model || '--'}</td>
-          <td style="text-align:right;padding:8px 6px;color:var(--text-dim)">${s.count || s.calls || 0}</td>
-          <td style="text-align:right;padding:8px 6px;color:var(--accent)">${fmtNum(s.input_tokens || 0)}</td>
-          <td style="text-align:right;padding:8px 6px;color:var(--success)">${fmtNum(s.output_tokens || 0)}</td>
-        </tr>`).join('');
+          <td style="text-align:right;padding:8px 6px;color:var(--text-dim)">${calls}</td>
+          <td style="text-align:right;padding:8px 6px;color:var(--accent)">${fmtNum(s.total_input || s.input_tokens || 0)}</td>
+          <td style="text-align:right;padding:8px 6px;color:var(--success)">${fmtNum(s.total_output || s.output_tokens || 0)}</td>
+          <td style="text-align:right;padding:8px 6px;color:var(--text-dim)">${latency}</td>
+          <td style="text-align:right;padding:8px 6px;color:${errors > 0 ? 'var(--danger)' : 'var(--text-dim)'}">${errors}</td>
+        </tr>`;
+      }).join('');
     }
 
     // Chart: Agent requests
@@ -1018,6 +1383,74 @@ async function loadUsage(hours) {
   }
 }
 
+// TOKEN GUARD
+async function loadTokenGuard() {
+  try {
+    const d = await apiFetch('/token-guard');
+
+    document.getElementById('tg-threshold').textContent = (d.spike_threshold || 0) + 'x';
+    document.getElementById('tg-spikes').textContent = d.total_spikes_detected || 0;
+    document.getElementById('tg-blocks').textContent = d.total_budget_blocks || 0;
+    document.getElementById('tg-window').textContent = (d.window_hours || 0) + 'h';
+
+    const agents = d.agents || {};
+    const tbody = document.getElementById('tg-agent-tbody');
+    const barsDiv = document.getElementById('tg-budget-bars');
+    const entries = Object.entries(agents);
+
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-dim);padding:16px;text-align:center">Belum ada traffic sejak restart</td></tr>';
+      barsDiv.innerHTML = '<div style="color:var(--text-dim);font-family:var(--mono);font-size:11px">Belum ada data</div>';
+      return;
+    }
+
+    tbody.innerHTML = entries.map(([id, a]) => {
+      const pct = a.budget_pct || 0;
+      const pctColor = pct > 80 ? 'var(--danger)' : pct > 50 ? 'var(--warn)' : 'var(--accent)';
+      const remaining = a.budget_remaining < 0 ? 'unlimited' : fmtNum(a.budget_remaining);
+      const budget = a.budget > 0 ? fmtNum(a.budget) : 'unlimited';
+      return `
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:8px 6px;color:var(--accent)">${id}</td>
+          <td style="text-align:right;padding:8px 6px;color:var(--text)">${fmtNum(a.current_hour_tokens)}</td>
+          <td style="text-align:right;padding:8px 6px;color:var(--text-dim)">${fmtNum(a.moving_avg_per_hour)}</td>
+          <td style="text-align:right;padding:8px 6px;color:var(--accent2)">${budget}</td>
+          <td style="text-align:right;padding:8px 6px;color:${pctColor}">${remaining}</td>
+          <td style="text-align:right;padding:8px 6px;color:${pctColor}">${pct.toFixed(1)}%</td>
+          <td style="text-align:right;padding:8px 6px;color:var(--text-dim)">${a.current_hour_requests}</td>
+        </tr>`;
+    }).join('');
+
+    // Budget bars
+    barsDiv.innerHTML = entries.map(([id, a]) => {
+      if (a.budget <= 0) return '';
+      const pct = Math.min(100, a.budget_pct || 0);
+      const barColor = pct > 80 ? 'var(--danger)' : pct > 50 ? 'var(--warn)' : 'var(--accent)';
+      return `
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;margin-bottom:4px">
+            <span style="color:var(--accent)">${id}</span>
+            <span style="color:var(--text-dim)">${fmtNum(a.current_hour_tokens)} / ${fmtNum(a.budget)}</span>
+          </div>
+          <div style="background:var(--surface);border-radius:4px;height:12px;overflow:hidden;border:1px solid var(--border)">
+            <div style="background:${barColor};height:100%;width:${pct}%;border-radius:3px;transition:width .3s"></div>
+          </div>
+        </div>`;
+    }).filter(Boolean).join('');
+
+    if (!barsDiv.innerHTML) {
+      barsDiv.innerHTML = '<div style="color:var(--text-dim);font-family:var(--mono);font-size:11px">No budget-limited agents</div>';
+    }
+
+    // Render budget editor
+    renderTokenGuardBudgets(agents);
+
+  } catch(e) {
+    if (e.message !== 'Unauthorized')
+      showToast('Failed to load Token Guard', 'err');
+  }
+}
+
 // SETTINGS
 function renderSettings() {
   const routing = configData.smart_routing || {};
@@ -1059,6 +1492,75 @@ async function reloadConfig() {
 function clearToken() {
   localStorage.removeItem('pawang_panel_auth');
   location.reload();
+}
+
+// THEME
+function setTheme(t) {
+  if (t === 'light') {
+    document.body.classList.add('light');
+  } else {
+    document.body.classList.remove('light');
+  }
+  localStorage.setItem('pawang_theme', t);
+  document.getElementById('theme-label').textContent = 'Current: ' + t;
+}
+// Restore theme
+(function() {
+  const t = localStorage.getItem('pawang_theme') || 'dark';
+  setTheme(t);
+})();
+
+// CHANGE PASSWORD
+async function changePassword() {
+  const pw = document.getElementById('new-password').value;
+  if (!pw || pw.length < 4) { showToast('Password minimal 4 karakter', 'err'); return; }
+  try {
+    const d = await apiFetch('/password', {
+      method: 'POST',
+      body: JSON.stringify({ password: pw })
+    });
+    if (d.ok) {
+      AUTH.password = pw;
+      localStorage.setItem('pawang_panel_auth', JSON.stringify(AUTH));
+      document.getElementById('new-password').value = '';
+      showToast('Password updated', 'ok');
+    } else {
+      showToast('Error: ' + (d.error || 'unknown'), 'err');
+    }
+  } catch(e) { showToast('Failed to update password', 'err'); }
+}
+
+// TOKEN GUARD — budget editor
+function renderTokenGuardBudgets(agents) {
+  const div = document.getElementById('tg-budget-edit');
+  div.innerHTML = Object.entries(agents).map(([id, a]) => `
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-family:var(--mono);font-size:11px;color:var(--accent);min-width:60px">${id}</span>
+      <input type="number" id="tg-b-${id}" value="${a.budget}" min="0" step="50000"
+        style="font-family:var(--mono);font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;width:120px">
+    </div>
+  `).join('');
+}
+
+async function saveTokenGuardBudgets() {
+  const inputs = document.querySelectorAll('[id^="tg-b-agent"]');
+  const budgets = {};
+  inputs.forEach(inp => {
+    const id = inp.id.replace('tg-b-', '');
+    budgets[id] = parseInt(inp.value) || 0;
+  });
+  try {
+    const d = await apiFetch('/token-guard/budgets', {
+      method: 'POST',
+      body: JSON.stringify({ budgets })
+    });
+    if (d.ok) {
+      showToast('Budgets updated', 'ok');
+      await loadTokenGuard();
+    } else {
+      showToast('Error: ' + (d.error || 'unknown'), 'err');
+    }
+  } catch(e) { showToast('Failed to save budgets', 'err'); }
 }
 
 // INIT

@@ -49,6 +49,14 @@ def get_provider(config: PawangConfig, provider_name: str) -> BaseProvider:
     return instance
 
 
+def _strip_provider_prefix(provider_name: str, model: str) -> str:
+    """Strip provider prefix from model name (e.g. 'sumopod/glm-5' -> 'glm-5')."""
+    prefix = f"{provider_name}/"
+    if model.startswith(prefix):
+        return model[len(prefix):]
+    return model
+
+
 async def complete(
     config: PawangConfig,
     provider_name: str,
@@ -61,6 +69,7 @@ async def complete(
 ) -> CompletionResponse:
     """Send a non-streaming completion request."""
     provider = get_provider(config, provider_name)
+    model = _strip_provider_prefix(provider_name, model)
     request = CompletionRequest(
         messages=messages,
         model=model,
@@ -87,6 +96,7 @@ async def stream(
 ) -> AsyncIterator[CompletionChunk]:
     """Send a streaming completion request."""
     provider = get_provider(config, provider_name)
+    model = _strip_provider_prefix(provider_name, model)
     request = CompletionRequest(
         messages=messages,
         model=model,

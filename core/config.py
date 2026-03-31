@@ -44,6 +44,7 @@ class ProviderConfig:
     api_key: str
     api_format: str  # openai | anthropic | gemini
     models: list[str] = field(default_factory=list)
+    methods: list[str] = field(default_factory=list)  # sdk, python, nodejs, openai, curl (reference only)
 
 
 @dataclass
@@ -57,6 +58,9 @@ class AgentConfig:
     max_context_tokens: int = 100000
     temperature: float = 0.7
     max_iterations: int = 15  # tool loop iteration budget
+    fallbacks: list[str] = field(default_factory=list)  # model fallback chain
+    chat_model: str = ""      # cheap model for regular chat (no tools)
+    chat_provider: str = ""   # provider for chat_model
 
 
 @dataclass
@@ -199,6 +203,33 @@ def save_config(config: PawangConfig, path: Path = CONFIG_PATH):
     """Write current runtime config back to config.yaml, preserving structure."""
     raw = yaml.safe_load(path.read_text())
 
+    # Update providers from runtime
+    raw_providers = raw.get("providers", {})
+    for name, prov in config.providers.items():
+        if name not in raw_providers:
+            # New provider added at runtime
+            entry = {
+                "base_url": prov.base_url,
+                "api_key": f"${{{name.upper()}_API_KEY}}",
+                "api_format": prov.api_format,
+                "models": prov.models,
+            }
+            if prov.methods:
+                entry["methods"] = prov.methods
+            raw_providers[name] = entry
+        else:
+            rp = raw_providers[name]
+            rp["base_url"] = prov.base_url
+            rp["api_format"] = prov.api_format
+            rp["models"] = prov.models
+            if prov.methods:
+                rp["methods"] = prov.methods
+    # Remove providers deleted at runtime
+    for name in list(raw_providers.keys()):
+        if name not in config.providers:
+            del raw_providers[name]
+    raw["providers"] = raw_providers
+
     # Update agent names/models/providers/temps from runtime
     raw_agents = raw.get("agents", [])
     for ra in raw_agents:
@@ -209,5 +240,9 @@ def save_config(config: PawangConfig, path: Path = CONFIG_PATH):
             ra["provider"] = agent.provider
             ra["temperature"] = agent.temperature
             ra["max_iterations"] = agent.max_iterations
+            ra["fallbacks"] = agent.fallbacks
+            if agent.chat_model:
+                ra["chat_model"] = agent.chat_model
+                ra["chat_provider"] = agent.chat_provider
 
     path.write_text(yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False))

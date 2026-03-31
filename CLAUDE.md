@@ -51,9 +51,9 @@ nohup python3 /root/openclaw/pawang/main.py > /tmp/pawang.log 2>&1 &
 ```
 
 ## Current Status
-- Phase 1–4 complete
-- All agents on Qwen/ModelStudio (OpenRouter habis, DeepSeek reserved for OpenClaw)
-- Telegram bot token: 8736732111 (separate from OpenClaw's 8746504916)
+- Phase 1–7 complete + audit
+- Multi-provider: OpenAI, DeepSeek, Z.ai, Gemini, SumoPod, etc.
+- Dual-model agent support (cheap chat + powerful tools)
 
 ## Completed Phases
 - **Phase 1**: Core gateway, provider adapters, agent manager, tool system

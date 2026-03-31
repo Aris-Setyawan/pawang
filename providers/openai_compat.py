@@ -18,7 +18,7 @@ from core.logger import log
 
 
 # Models that are reasoning models (auto-detect)
-_REASONING_MODELS = {"o1", "o3", "o3-mini", "o4-mini", "deepseek-reasoner"}
+_REASONING_MODELS = {"o1", "o3", "o3-mini", "o4-mini", "deepseek-reasoner", "glm-5"}
 # Models supporting Anthropic-style thinking via OpenRouter
 _ANTHROPIC_MODELS_PREFIX = ("anthropic/claude-opus", "anthropic/claude-sonnet")
 
@@ -37,9 +37,16 @@ class OpenAIProvider(BaseProvider):
         }
 
     def _is_reasoning_model(self, model: str) -> bool:
-        """Check if model is a reasoning model."""
+        """Check if model is a reasoning model (uses max_completion_tokens)."""
         base = model.split("/")[-1]  # strip provider prefix
-        return base in _REASONING_MODELS or base.startswith(("o1", "o3", "o4"))
+        if base in _REASONING_MODELS:
+            return True
+        if base.startswith(("o1", "o3", "o4")):
+            return True
+        # GPT-5+ series all use max_completion_tokens
+        if base.startswith("gpt-5"):
+            return True
+        return False
 
     def _is_deepseek_reasoner(self, model: str) -> bool:
         return "deepseek-reasoner" in model
@@ -73,6 +80,7 @@ class OpenAIProvider(BaseProvider):
 
         if request.tools:
             body["tools"] = request.tools
+            body["tool_choice"] = "auto"
 
         # --- Reasoning model adjustments ---
         if self._is_reasoning_model(request.model):

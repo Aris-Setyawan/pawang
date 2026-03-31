@@ -218,7 +218,7 @@ class Database:
     def record_usage(self, provider: str, model: str, agent_id: str, user_id: str,
                      input_tokens: int = 0, output_tokens: int = 0,
                      latency_ms: float = 0, success: bool = True, error: str = ""):
-        """Record API usage for tracking."""
+        """Record API usage for tracking + feed TokenGuard."""
         with self._lock:
             self.conn.execute(
                 "INSERT INTO usage (provider, model, agent_id, user_id, input_tokens, output_tokens, "
@@ -227,6 +227,20 @@ class Database:
                  latency_ms, int(success), error, time.time()),
             )
             self.conn.commit()
+
+        # Feed TokenGuard (async-safe fire-and-forget)
+        if success and (input_tokens + output_tokens) > 0:
+            try:
+                import asyncio
+                from core.token_guard import get_token_guard
+                guard = get_token_guard()
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(
+                        guard.record(agent_id, input_tokens, output_tokens, provider, model)
+                    )
+            except Exception:
+                pass  # guard not initialized yet during startup
 
     def get_usage_stats(self, hours: int = 24) -> dict:
         """Get usage statistics for the last N hours."""
@@ -285,13 +299,13 @@ class Database:
         """Get memories for a user, optionally filtered by category."""
         if category:
             rows = self.conn.execute(
-                "SELECT id, content, category, agent_id, created_at FROM memories "
+                "SELECT id, content, category, agent_id, created_at, memory_type FROM memories "
                 "WHERE user_id = ? AND category = ? ORDER BY created_at DESC LIMIT ?",
                 (user_id, category, limit),
             ).fetchall()
         else:
             rows = self.conn.execute(
-                "SELECT id, content, category, agent_id, created_at FROM memories "
+                "SELECT id, content, category, agent_id, created_at, memory_type FROM memories "
                 "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
                 (user_id, limit),
             ).fetchall()

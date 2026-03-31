@@ -29,11 +29,16 @@ providers:
     api_key: ${OPENAI_API_KEY}
     api_format: openai
     models:
+      - gpt-5.4
+      - gpt-5.4-mini
+      - gpt-5.4-nano
+      - gpt-5.2
+      - gpt-5-mini
+      - gpt-4.1
+      - gpt-4.1-mini
       - gpt-4o
-      - gpt-4o-mini
       - o3
       - o4-mini
-      - codex-mini-latest
 
   google:
     base_url: https://generativelanguage.googleapis.com/v1beta
@@ -62,6 +67,16 @@ providers:
     api_format: openai
     models: []  # dynamic, fetched from API
 
+  zai:
+    base_url: https://api.z.ai/api/paas/v4
+    api_key: ${ZAI_API_KEY}
+    api_format: openai
+    models:
+      - glm-5
+      - glm-5-turbo
+      - glm-4.7
+      - glm-4.5
+
   kieai:
     base_url: https://api.kie.ai/api/v1
     api_key: ${KIEAI_API_KEY}
@@ -69,11 +84,64 @@ providers:
     models:
       - flux-1.1-pro  # image generation
 
+  sumopod:
+    base_url: https://ai.sumopod.com/v1
+    api_key: ${SUMOPOD_API_KEY}
+    api_format: openai
+    models:
+      - deepseek-v3-2
+      - deepseek-r1
+      - gpt-5.2
+      - gpt-5.2-codex
+      - gpt-5.1
+      - gpt-5.1-codex
+      - gpt-5.1-codex-mini
+      - gpt-5
+      - gpt-5-mini
+      - gpt-5-nano
+      - gpt-4.1
+      - gpt-4.1-mini
+      - gpt-4.1-nano
+      - gpt-4o
+      - gpt-4o-mini
+      - gpt-image-1
+      - gemini/gemini-3-pro-preview
+      - gemini/gemini-3-flash-preview
+      - gemini/gemini-2.5-pro
+      - gemini/gemini-2.5-flash
+      - gemini/gemini-2.5-flash-lite
+      - gemini/gemini-2.0-flash
+      - gemini/gemini-2.0-flash-lite
+      - claude-haiku-4-5
+      - kimi-k2
+      - kimi-k2-thinking
+      - kimi-k2-5-260127
+      - glm-5.1
+      - glm-5
+      - glm-5-code
+      - glm-5-turbo
+      - glm-4-7
+      - seed-2-0-pro
+      - seed-2-0-pro-free
+      - seed-2-0-lite
+      - seed-2-0-lite-free
+      - seed-2-0-mini
+      - seed-2-0-mini-free
+      - seed-1-8
+      - text-embedding-3-large
+      - text-embedding-3-small
+
 agents:
   - id: agent1
     name: Wulan
-    model: deepseek-chat
-    provider: deepseek
+    model: gpt-5.4
+    provider: openai
+    chat_model: deepseek-chat     # murah buat ngobrol biasa
+    chat_provider: deepseek       # provider langsung
+    fallbacks:
+      - openai/gpt-5.2
+      - openai/gpt-4.1
+      - sumopod/gpt-5.2
     system_prompt_file: prompts/agent1.md
     channels: [telegram]
     max_context_tokens: 128000
@@ -81,36 +149,50 @@ agents:
 
   - id: agent2
     name: Rani
-    model: gemini-2.0-flash
-    provider: google
+    model: sumopod/gpt-5.2
+    provider: sumopod
+    fallbacks:
+      - sumopod/gemini/gemini-2.5-flash
+      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent2.md
     channels: []
-    max_context_tokens: 64000
+    max_context_tokens: 128000
     temperature: 0.9
 
   - id: agent3
     name: Dewi
-    model: deepseek-chat
-    provider: deepseek
+    model: glm-5
+    provider: zai
+    fallbacks:
+      - deepseek/deepseek-reasoner
+      - sumopod/kimi-k2-thinking
+      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent3.md
     channels: []
-    max_context_tokens: 64000
+    max_context_tokens: 128000
     temperature: 0.3
 
   - id: agent4
     name: Bima
-    model: deepseek-chat
-    provider: deepseek
+    model: sumopod/gpt-5.2-codex
+    provider: sumopod
+    fallbacks:
+      - sumopod/gpt-5.1-codex
+      - zai/glm-5-turbo
+      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent4.md
     channels: []
-    max_context_tokens: 64000
+    max_context_tokens: 128000
     temperature: 0.5
 
   # Backup / Failover agents
   - id: agent5
     name: Wulan B
-    model: gemini-2.0-flash
-    provider: google
+    model: sumopod/gpt-5-mini
+    provider: sumopod
+    fallbacks:
+      - sumopod/gemini/gemini-2.0-flash
+      - sumopod/seed-2-0-pro
     system_prompt_file: prompts/agent5.md
     channels: []
     max_context_tokens: 128000
@@ -118,29 +200,38 @@ agents:
 
   - id: agent6
     name: Rani B
-    model: gpt-4o-mini
-    provider: openai
+    model: sumopod/gemini/gemini-3-flash-preview
+    provider: sumopod
+    fallbacks:
+      - sumopod/gpt-5-mini
+      - zai/glm-5
     system_prompt_file: prompts/agent6.md
     channels: []
-    max_context_tokens: 64000
+    max_context_tokens: 1000000
     temperature: 0.9
 
   - id: agent7
     name: Dewi B
-    model: gemini-2.5-flash
-    provider: google
+    model: sumopod/gemini/gemini-2.5-pro
+    provider: sumopod
+    fallbacks:
+      - sumopod/kimi-k2-thinking
+      - deepseek/deepseek-reasoner
     system_prompt_file: prompts/agent7.md
     channels: []
-    max_context_tokens: 64000
+    max_context_tokens: 1000000
     temperature: 0.3
 
   - id: agent8
     name: Bima B
-    model: gpt-4o-mini
-    provider: openai
+    model: glm-5-turbo
+    provider: zai
+    fallbacks:
+      - sumopod/gpt-5.1-codex-mini
+      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent8.md
     channels: []
-    max_context_tokens: 64000
+    max_context_tokens: 128000
     temperature: 0.5
 
 channels:
@@ -174,7 +265,7 @@ panel:
 
 smart_routing:
   enabled: true
-  cheap_provider: google
-  cheap_model: gemini-2.0-flash
+  cheap_provider: openai
+  cheap_model: gpt-5.4-mini
 
 session_timeout: 14400  # 4 hours idle = auto-reset

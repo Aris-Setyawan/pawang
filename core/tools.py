@@ -28,11 +28,12 @@ DELEGATE_TOOL = {
     "function": {
         "name": "delegate_task",
         "description": (
-            "Delegasikan tugas ke agent spesialis lain. "
+            "WAJIB PANGGIL tool ini untuk delegasi tugas CODING dan CREATIVE ke agent lain. "
+            "Semua tugas coding HARUS didelegasi, jangan dikerjakan sendiri. "
             "agent2=Creative (gambar/video/audio/musik), "
-            "agent3=Analyst (analisis/riset/data), "
-            "agent4=Coder (coding/debug/server). "
-            "Gunakan ini untuk tugas yang bukan keahlian kamu."
+            "agent3=Coder Primary (coding/scripting/bug fix), "
+            "agent4=Coder Advanced (architecture/algorithm/deep debug). "
+            "PENGECUALIAN — jangan delegate: pertanyaan umum, status system, config, list model, cek saldo."
         ),
         "parameters": {
             "type": "object",

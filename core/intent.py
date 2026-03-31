@@ -59,9 +59,9 @@ async def classify_intent(
     # For ambiguous messages, use AI classifier
     # Pick fastest available model
     fast_providers = [
-        ("deepseek", "deepseek-chat"),
-        ("google", "gemini-2.0-flash"),
-        ("openai", "gpt-4o-mini"),
+        ("openai", "gpt-5.4-mini"),
+        ("google", "gemini-2.5-flash"),
+        ("sumopod", "gpt-5-mini"),
     ]
 
     provider_name = None

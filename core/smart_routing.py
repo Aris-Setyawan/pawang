@@ -15,8 +15,13 @@ _COMPLEX_KEYWORDS = {
     "benchmark", "optimize", "review", "terminal", "pytest", "test",
     "plan", "delegate", "docker", "kubernetes", "deploy", "migrate",
     "coding", "code", "script", "function", "class", "database",
-    "sql", "api", "server", "config", "install", "setup",
-    "buatkan", "buat", "tulis", "perbaiki", "jelaskan", "analisa",
+    "sql", "api", "server", "config", "install", "setup", "cli",
+    # Indonesian variations — jangan sampai lolos smart routing
+    "buatkan", "buatin", "buat", "bikin", "bikinin", "tolong",
+    "tulis", "tuliskan", "perbaiki", "benerin", "fixkan",
+    "jelaskan", "jelasin", "analisa", "cek", "monitor",
+    "hapus", "ubah", "ganti", "tambah", "tambahin", "update",
+    "kerjakan", "kerjain", "selesaikan", "selesain",
 }
 
 # Max thresholds for "simple" messages

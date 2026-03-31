@@ -31,6 +31,202 @@ EDIT_INTERVAL = 1.5
 EDIT_CHAR_THRESHOLD = 80
 MODELS_PER_PAGE = 8  # models per page in inline keyboard
 
+# Tool emojis for progress display
+_TOOL_EMOJI = {
+    "delegate_task": "\U0001f4e4", "check_balances": "\U0001f4b0",
+    "generate_image": "\U0001f3a8", "generate_video": "\U0001f3ac",
+    "generate_audio": "\U0001f3b5", "web_search": "\U0001f50d",
+    "web_fetch": "\U0001f310", "run_bash": "\U0001f4bb",
+    "save_memory": "\U0001f4be", "recall_memories": "\U0001f9e0",
+    "delete_memory": "\U0001f5d1", "weather": "\u2600\ufe0f",
+    "send_file": "\U0001f4ce", "file_read": "\U0001f4c4",
+    "file_write": "\u270f\ufe0f", "file_search": "\U0001f50e",
+    "python_exec": "\U0001f40d", "code_search": "\U0001f50d",
+    "wikipedia": "\U0001f4da", "translate": "\U0001f30d",
+    "calculator": "\U0001f522", "read_pdf": "\U0001f4d1",
+}
+_DEFAULT_EMOJI = "\u2699\ufe0f"
+
+# Regex to strip DeepSeek DSML markup that leaks as raw text
+import re
+_DSML_PATTERN = re.compile(
+    r'<｜DSML｜function_calls>.*?</｜DSML｜function_calls>',
+    re.DOTALL,
+)
+_DSML_PARTIAL = re.compile(r'<｜DSML｜[^>]*>.*', re.DOTALL)
+
+
+def _strip_dsml(text: str) -> str:
+    """Strip DeepSeek DSML tool-call markup that leaks into text responses."""
+    if '｜DSML｜' not in text:
+        return text
+    # Strip complete DSML blocks
+    text = _DSML_PATTERN.sub('', text)
+    # Strip partial/unclosed DSML blocks
+    text = _DSML_PARTIAL.sub('', text)
+    return text.strip()
+
+
+def _get_tool_preview(name: str, args: dict) -> str:
+    """Extract human-readable preview of what a tool call is doing."""
+    emoji = _TOOL_EMOJI.get(name, _DEFAULT_EMOJI)
+
+    if name == "run_bash":
+        cmd = args.get("command", "")
+        if len(cmd) > 80:
+            cmd = cmd[:77] + "..."
+        return f'{emoji} bash: `{cmd}`'
+
+    elif name == "python_exec":
+        code = args.get("code", "")
+        # Show first meaningful line
+        lines = [l.strip() for l in code.split("\n") if l.strip() and not l.strip().startswith("#")]
+        preview = lines[0] if lines else code[:60]
+        if len(preview) > 60:
+            preview = preview[:57] + "..."
+        return f'{emoji} python: `{preview}`'
+
+    elif name == "file_read":
+        path = args.get("path", args.get("file_path", ""))
+        return f'{emoji} read: `{path}`'
+
+    elif name == "file_write":
+        path = args.get("path", args.get("file_path", ""))
+        content = args.get("content", "")
+        size = len(content)
+        return f'{emoji} write: `{path}` ({size} chars)'
+
+    elif name == "file_search":
+        pattern = args.get("pattern", args.get("query", ""))
+        path = args.get("path", args.get("directory", ""))
+        return f'{emoji} search: `{pattern}` in {path or "."}'
+
+    elif name == "code_search":
+        pattern = args.get("pattern", args.get("query", ""))
+        return f'{emoji} code_search: `{pattern}`'
+
+    elif name == "web_search":
+        query = args.get("query", "")
+        return f'{emoji} web: "{query}"'
+
+    elif name == "web_fetch":
+        url = args.get("url", "")
+        if len(url) > 60:
+            url = url[:57] + "..."
+        return f'{emoji} fetch: {url}'
+
+    elif name == "delegate_task":
+        agent_id = args.get("agent_id", "")
+        task = args.get("task", "")
+        if len(task) > 60:
+            task = task[:57] + "..."
+        return f'{emoji} delegate → {agent_id}: "{task}"'
+
+    elif name == "generate_image":
+        prompt = args.get("prompt", "")
+        if len(prompt) > 50:
+            prompt = prompt[:47] + "..."
+        return f'{emoji} image: "{prompt}"'
+
+    elif name == "generate_video":
+        prompt = args.get("prompt", "")
+        if len(prompt) > 50:
+            prompt = prompt[:47] + "..."
+        return f'{emoji} video: "{prompt}"'
+
+    elif name == "generate_audio":
+        text = args.get("text", "")
+        if len(text) > 50:
+            text = text[:47] + "..."
+        voice = args.get("voice", "")
+        return f'{emoji} audio ({voice}): "{text}"'
+
+    elif name == "wikipedia":
+        query = args.get("query", "")
+        return f'{emoji} wiki: "{query}"'
+
+    elif name == "translate":
+        text = args.get("text", "")
+        target = args.get("target_language", args.get("target", ""))
+        if len(text) > 40:
+            text = text[:37] + "..."
+        return f'{emoji} translate → {target}: "{text}"'
+
+    elif name == "calculator":
+        expr = args.get("expression", "")
+        return f'{emoji} calc: `{expr}`'
+
+    elif name == "read_pdf":
+        path = args.get("path", args.get("file_path", ""))
+        return f'{emoji} pdf: `{path}`'
+
+    elif name in ("save_memory", "recall_memories", "delete_memory"):
+        return f'{emoji} {name}'
+
+    elif name == "check_balances":
+        return f'{emoji} cek saldo API'
+
+    elif name == "send_file":
+        path = args.get("file_path", "")
+        return f'{emoji} send: `{path}`'
+
+    elif name == "weather":
+        loc = args.get("location", "")
+        return f'{emoji} cuaca: {loc}'
+
+    else:
+        return f'{emoji} {name}'
+
+
+def _get_output_snippet(name: str, output: str, success: bool, max_len: int = 80) -> str:
+    """Extract a short human-readable snippet from tool output."""
+    if not output:
+        return ""
+    # Clean up output
+    text = output.strip()
+    if not text or text == "(no output)":
+        return "OK" if success else "no output"
+
+    # For errors, show first line
+    if not success:
+        first_line = text.split("\n")[0].strip()
+        if len(first_line) > max_len:
+            first_line = first_line[:max_len - 3] + "..."
+        return first_line
+
+    # For file_write, just confirm
+    if name == "file_write":
+        return "written OK" if success else text[:max_len]
+
+    # For bash/python, show first meaningful line(s) of output
+    if name in ("run_bash", "python_exec"):
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if not lines:
+            return "OK"
+        snippet = lines[0]
+        if len(lines) > 1:
+            snippet += f" (+{len(lines) - 1} lines)"
+        if len(snippet) > max_len:
+            snippet = snippet[:max_len - 3] + "..."
+        return snippet
+
+    # For web_search, show result count or first result
+    if name == "web_search":
+        lines = text.split("\n")
+        for l in lines[:3]:
+            l = l.strip()
+            if l and not l.startswith("http"):
+                if len(l) > max_len:
+                    l = l[:max_len - 3] + "..."
+                return l
+        return f"{len(lines)} results"
+
+    # Default: first line truncated
+    first_line = text.split("\n")[0].strip()
+    if len(first_line) > max_len:
+        first_line = first_line[:max_len - 3] + "..."
+    return first_line
+
 
 class TelegramBot:
     """Telegram bot with inline keyboard model picker."""
@@ -49,6 +245,11 @@ class TelegramBot:
         self._task_messages: dict[str, object] = {}  # user_id -> telegram message being edited
         self._thinking_mode: dict[int, str] = {}  # user_id -> effort level
         self._voice_reply: dict[int, bool] = {}  # user_id -> voice reply enabled
+        self._interrupted: dict[str, bool] = {}  # user_id -> interrupt requested
+        self._tool_history: dict[str, list] = {}  # user_id -> tool execution history
+        # Background delegation tracking — multiple concurrent delegations per user
+        self._bg_delegations: dict[str, dict[str, dict]] = {}  # user_id -> {agent_id -> {task info}}
+        self._monitoring: dict[str, str] = {}  # user_id -> agent_id being watched (or "" = none)
         self._restore_settings()
 
     def _restore_settings(self):
@@ -293,11 +494,30 @@ class TelegramBot:
 
             agent_id = self._get_agent_id(user_id)
             session = self.manager.get_session(agent_id, str(user_id))
-            self.manager.switch_model(session, provider, model)
+            self.manager.switch_model(session, provider, model, persist=True)
 
             await query.edit_message_text(
-                f"Switched to {provider}/{model}"
+                f"Switched to {provider}/{model} ✓\n"
+                f"(saved as default for {agent_id})"
             )
+
+        elif data.startswith("watch:"):
+            # Watch a specific background delegation
+            target_aid = data.split(":")[1]
+            await self._enter_watch(query, str(user_id), target_aid)
+
+        elif data.startswith("stop_bg:"):
+            # Stop a specific background delegation
+            target_aid = data.split(":")[1]
+            uid = str(user_id)
+            user_bg = self._bg_delegations.get(uid, {})
+            info = user_bg.get(target_aid)
+            if info:
+                info["interrupted"] = True
+                name = info.get("agent_name", target_aid)
+                await query.edit_message_text(f"⚡ Stop requested: {name}")
+            else:
+                await query.edit_message_text("Delegasi sudah selesai.")
 
         elif data.startswith("mgmt:"):
             # Show provider detail
@@ -665,10 +885,11 @@ class TelegramBot:
         user_id = str(update.effective_user.id)
         agent_id = self._get_agent_id(update.effective_user.id)
         session = self.manager.get_session(agent_id, user_id)
-        self.manager.switch_model(session, provider_name, model_name)
+        self.manager.switch_model(session, provider_name, model_name, persist=True)
 
         await update.message.reply_text(
-            f"Switched to {provider_name}/{model_name}"
+            f"Switched to {provider_name}/{model_name} ✓\n"
+            f"(saved as default for {agent_id})"
         )
 
     async def _cmd_agent(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -760,11 +981,11 @@ class TelegramBot:
         user_id = str(update.effective_user.id)
         await update.message.chat.send_action(ChatAction.TYPING)
 
-        # Pick fastest model — priority: deepseek > google > openai > anything
+        # Pick fastest model — priority: openai > google > sumopod > anything
         fast_providers = [
-            ("deepseek", "deepseek-chat"),
-            ("google", "gemini-2.0-flash"),
-            ("openai", "gpt-4o-mini"),
+            ("openai", "gpt-5.4-mini"),
+            ("google", "gemini-2.5-flash"),
+            ("sumopod", "gpt-5-mini"),
         ]
         fast_provider = None
         fast_model = None
@@ -1007,6 +1228,24 @@ class TelegramBot:
             report = report[:4093] + "..."
         await update.message.reply_text(report)
 
+    async def _cmd_tokenguard(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show Token Guard status.
+        /tokenguard — show spike detector + budget status
+        """
+        if not self._is_allowed(update.effective_user.id):
+            return
+
+        uid = update.effective_user.id
+        admin_id = self.config.telegram.admin_chat_id
+        if admin_id and str(uid) != str(admin_id):
+            await update.message.reply_text("Hanya admin yang bisa lihat token guard.")
+            return
+
+        from core.token_guard import get_token_guard
+        guard = get_token_guard()
+        report = guard.get_report()
+        await update.message.reply_text(report)
+
     async def _cmd_moa(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Mixture of Agents — multi-model reasoning.
         /moa <question>
@@ -1205,12 +1444,131 @@ class TelegramBot:
         db = get_db()
         db.record_usage("vision", "auto", agent_id, user_id, 0, len(result or "") // 4, 0)
 
+    async def _cmd_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Stop running task AND/OR background delegation."""
+        if not self._is_allowed(update.effective_user.id):
+            return
+        user_id = str(update.effective_user.id)
+        stopped = []
+
+        # Stop foreground task
+        task = self.tasks.get_active(user_id)
+        if task:
+            self._interrupted[user_id] = True
+            stopped.append("foreground task")
+
+        # Stop all background delegations
+        user_bg = self._bg_delegations.get(user_id, {})
+        if user_bg:
+            for aid, info in user_bg.items():
+                info["interrupted"] = True
+                stopped.append(f"delegasi ke {info.get('agent_name', aid)}")
+
+        if stopped:
+            await update.message.reply_text(
+                f"⚡ Stop requested: {', '.join(stopped)}"
+            )
+        else:
+            await update.message.reply_text("Tidak ada task yang sedang berjalan.")
+
+    async def _cmd_watch(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Watch/re-enter live monitoring of background delegation.
+
+        If multiple delegations are running, shows inline buttons to pick which one.
+        If only one, enters monitoring directly.
+        """
+        if not self._is_allowed(update.effective_user.id):
+            return
+        user_id = str(update.effective_user.id)
+        user_bg = self._bg_delegations.get(user_id, {})
+
+        if not user_bg:
+            await update.message.reply_text("Tidak ada delegasi yang sedang berjalan.")
+            return
+
+        if len(user_bg) == 1:
+            # Single delegation — enter monitoring directly
+            aid = next(iter(user_bg))
+            await self._enter_watch(update, user_id, aid)
+        else:
+            # Multiple delegations — show selection buttons
+            buttons = []
+            for aid, info in user_bg.items():
+                name = info.get("agent_name", aid)
+                task_short = info.get("task", "")[:40]
+                steps = len(info.get("history", []))
+                label = f"👁️ {name} ({steps} steps)"
+                buttons.append([InlineKeyboardButton(label, callback_data=f"watch:{aid}")])
+            keyboard = InlineKeyboardMarkup(buttons)
+            await update.message.reply_text(
+                f"📋 {len(user_bg)} delegasi aktif — pilih untuk monitoring:",
+                reply_markup=keyboard,
+            )
+
+    async def _enter_watch(self, update_or_query, user_id: str, agent_id: str):
+        """Enter live monitoring for a specific agent delegation."""
+        user_bg = self._bg_delegations.get(user_id, {})
+        info = user_bg.get(agent_id)
+        if not info:
+            text = "Delegasi sudah selesai."
+            if hasattr(update_or_query, 'message') and update_or_query.message:
+                await update_or_query.message.reply_text(text)
+            return
+
+        self._monitoring[user_id] = agent_id
+        agent_name = info.get("agent_name", agent_id)
+        task_desc = info.get("task", "")[:80]
+        history = info.get("history", [])
+
+        lines = [f"👁️ Monitoring {agent_name} — ON"]
+        lines.append(f"Task: {task_desc}")
+        if history:
+            lines.append(f"\n📋 Progress ({len(history)} steps):")
+            for h in history[-8:]:
+                icon = "✅" if h.get("ok") else "❌"
+                lines.append(f"{icon} {h['preview']}")
+                if h.get("output"):
+                    lines.append(f"   → {h['output']}")
+        lines.append(f"\n/mute stop monitoring | /stop hentikan kerjaan")
+
+        if hasattr(update_or_query, 'message') and update_or_query.message:
+            await update_or_query.message.reply_text("\n".join(lines))
+        elif hasattr(update_or_query, 'edit_message_text'):
+            await update_or_query.edit_message_text("\n".join(lines))
+
+    async def _cmd_mute(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Mute progress updates — delegation keeps running."""
+        if not self._is_allowed(update.effective_user.id):
+            return
+        user_id = str(update.effective_user.id)
+        user_bg = self._bg_delegations.get(user_id, {})
+        if not user_bg:
+            await update.message.reply_text("Tidak ada delegasi yang sedang berjalan.")
+            return
+
+        watched = self._monitoring.get(user_id, "")
+        self._monitoring[user_id] = ""
+
+        if watched and watched in user_bg:
+            agent_name = user_bg[watched].get("agent_name", watched)
+        else:
+            agent_name = "semua agent"
+
+        active = len(user_bg)
+        await update.message.reply_text(
+            f"🔇 Monitoring OFF — {agent_name} tetap kerja di background.\n"
+            f"{'📋 ' + str(active) + ' delegasi masih aktif. ' if active > 1 else ''}"
+            f"Kamu bisa ngobrol sama Wulan.\n"
+            f"/watch untuk lihat progress lagi."
+        )
+
     async def _cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_allowed(update.effective_user.id):
             return
         user_id = str(update.effective_user.id)
         agent_id = self._get_agent_id(update.effective_user.id)
         self.manager.clear_session(agent_id, user_id)
+        self._tool_history.pop(user_id, None)
         await hooks.emit("session:reset", user_id=user_id, agent_id=agent_id)
         await update.message.reply_text("Conversation cleared.")
 
@@ -1667,9 +2025,9 @@ class TelegramBot:
     def _pick_fast_model(self) -> tuple[Optional[str], Optional[str]]:
         """Pick fastest available model for side questions."""
         for pname, mname in [
-            ("deepseek", "deepseek-chat"),
-            ("google", "gemini-2.0-flash"),
-            ("openai", "gpt-4o-mini"),
+            ("openai", "gpt-5.4-mini"),
+            ("google", "gemini-2.5-flash"),
+            ("sumopod", "gpt-5-mini"),
         ]:
             prov = self.config.get_provider(pname)
             if prov and prov.api_key:
@@ -1679,6 +2037,122 @@ class TelegramBot:
             if prov.api_key and prov.models:
                 return name, prov.models[0]
         return None, None
+
+    async def _bg_delegate(self, from_agent: str, target_id: str,
+                           target_name: str, task_desc: str,
+                           chat_id: str, user_id: str, session):
+        """Run delegation in background with live monitoring support.
+
+        Multiple delegations can run concurrently per user.
+        /watch shows buttons to pick which agent to monitor.
+        /mute stops updates, /stop cancels.
+        Result is always sent when done.
+        """
+        progress_msg = None
+        try:
+            # Register this delegation (multiple allowed per user)
+            bg_info = {
+                "agent_id": target_id,
+                "agent_name": target_name,
+                "task": task_desc,
+                "history": [],
+                "progress_msg": None,
+                "start_time": time.monotonic(),
+                "interrupted": False,
+            }
+            if user_id not in self._bg_delegations:
+                self._bg_delegations[user_id] = {}
+            self._bg_delegations[user_id][target_id] = bg_info
+
+            # Auto-watch if this is the only delegation
+            if len(self._bg_delegations[user_id]) == 1:
+                self._monitoring[user_id] = target_id
+
+            # Send initial progress message
+            progress_msg = await self.app.bot.send_message(
+                chat_id=int(chat_id),
+                text=(f"👁️ {target_name} sedang kerja...\n"
+                      f"Task: {task_desc[:100]}\n\n"
+                      f"/mute stop monitoring | /watch lihat progress | /stop hentikan"),
+            )
+            bg_info["progress_msg"] = progress_msg
+
+            async def _on_progress(preview: str):
+                """Update progress if user is watching THIS agent."""
+                watched = self._monitoring.get(user_id, "")
+                if watched != target_id:
+                    return  # user watching another agent or muted
+
+                text = (
+                    f"👁️ {target_name}:\n{preview}\n\n"
+                    f"/mute stop monitoring | /stop hentikan"
+                )
+                try:
+                    await progress_msg.edit_text(text[:4096])
+                except Exception:
+                    pass
+
+            def _check_interrupt():
+                return bg_info.get("interrupted", False)
+
+            result_text, child_used = await self.manager.delegate(
+                from_agent, target_id, user_id, task_desc,
+                chat_id=chat_id,
+                remaining_budget=0,
+                on_progress=_on_progress,
+                check_interrupt=_check_interrupt,
+            )
+
+            # Delegation finished — send result
+            ok = not result_text.startswith("[Error")
+            elapsed = time.monotonic() - bg_info["start_time"]
+            header = (f"✅ {target_name} selesai ({child_used} steps, {int(elapsed)}s)"
+                      if ok else f"❌ {target_name} gagal ({int(elapsed)}s)")
+
+            result_msg = f"{header}:\n\n{result_text}"
+            for i in range(0, len(result_msg), 4096):
+                await self.app.bot.send_message(
+                    chat_id=int(chat_id),
+                    text=result_msg[i:i+4096],
+                )
+
+            # Save to session history
+            self.manager.save_message(
+                session, "assistant",
+                f"[{target_name}]: {result_text}",
+                model="delegation", provider="internal",
+            )
+
+            # Clean up progress message
+            try:
+                if progress_msg:
+                    await progress_msg.delete()
+            except Exception:
+                pass
+
+        except Exception as e:
+            log.error(f"Background delegation error: {e}")
+            try:
+                await self.app.bot.send_message(
+                    chat_id=int(chat_id),
+                    text=f"❌ {target_name} error: {str(e)[:300]}",
+                )
+                if progress_msg:
+                    await progress_msg.delete()
+            except Exception:
+                pass
+
+        finally:
+            # Remove THIS delegation only
+            user_bg = self._bg_delegations.get(user_id, {})
+            user_bg.pop(target_id, None)
+            if not user_bg:
+                self._bg_delegations.pop(user_id, None)
+                self._monitoring.pop(user_id, None)
+            elif self._monitoring.get(user_id) == target_id:
+                # Was watching this one — auto-switch to remaining
+                remaining = next(iter(user_bg), "")
+                self._monitoring[user_id] = remaining
 
     async def _send_voice_reply(self, chat_id: int, text: str):
         """TTS the text and send as voice message. Best-effort, errors logged."""
@@ -1749,7 +2223,7 @@ class TelegramBot:
 
                 if not response.tool_calls:
                     # Final text response — display it
-                    final_text = response.text or "(empty response)"
+                    final_text = _strip_dsml(response.text) or "(empty response)"
                     if len(final_text) <= 4096:
                         await sent_msg.edit_text(final_text)
                     else:
@@ -1761,6 +2235,7 @@ class TelegramBot:
 
                     # Save to session & record usage
                     self.tasks.complete_task(user_id, final_text)
+                    self._tool_history.pop(user_id, None)
                     self.manager.save_message(session, "assistant", final_text,
                                               model=model, provider=provider_name)
                     await hooks.emit("message:sent", user_id=user_id, agent_id=agent_id,
@@ -1791,24 +2266,49 @@ class TelegramBot:
 
                 # --- Tool calls detected — execute them ---
 
-                # Build progress status message
-                _TOOL_EMOJI = {
-                    "delegate_task": "\U0001f4e4", "check_balances": "\U0001f4b0",
-                    "generate_image": "\U0001f3a8", "generate_video": "\U0001f3ac",
-                    "generate_audio": "\U0001f3b5", "web_search": "\U0001f50d",
-                    "run_bash": "\U0001f4bb", "save_memory": "\U0001f4be",
-                    "recall_memories": "\U0001f9e0", "weather": "\u2600\ufe0f",
-                    "send_file": "\U0001f4ce",
-                }
-                default_emoji = "\u2699\ufe0f"
-                tool_labels = [
-                    f"{_TOOL_EMOJI.get(tc.name, default_emoji)} {tc.name}"
-                    for tc in response.tool_calls
-                ]
-                budget_info = f"[{iteration + 1}/{max_iterations}]"
-                status = f"{budget_info} {', '.join(tool_labels)}..."
+                # Check interrupt
+                if self._interrupted.get(user_id):
+                    self._interrupted.pop(user_id, None)
+                    await sent_msg.edit_text("⚡ Task dihentikan oleh user.")
+                    self.tasks.fail_task(user_id, "interrupted")
+                    return
+
+                # Build detailed progress status message
+                progress_lines = [f"[{iteration + 1}/{max_iterations}] {agent_id}"]
+                for tc in response.tool_calls:
+                    try:
+                        tc_args = json.loads(tc.arguments)
+                    except json.JSONDecodeError:
+                        tc_args = {}
+                    progress_lines.append(_get_tool_preview(tc.name, tc_args))
+
+                # Include history of what was done (with output snippets)
+                history = self._tool_history.get(user_id, [])
+                if history:
+                    header = f"📋 Progress ({len(history)} done):\n"
+                    recent = history[-5:]  # last 5
+                    history_lines = []
+                    for h in recent:
+                        icon = "✅" if h.get("ok") else "❌"
+                        line = f"{icon} {h['preview']}"
+                        if h.get("output"):
+                            line += f"\n   → {h['output']}"
+                        history_lines.append(line)
+                    if len(history) > 5:
+                        history_lines.insert(0, f"  ... +{len(history) - 5} more")
+                    progress_text = (
+                        header + "\n".join(history_lines) +
+                        "\n\n🔄 Now:\n" + "\n".join(progress_lines[1:]) +
+                        f"\n\n/stop untuk hentikan"
+                    )
+                else:
+                    progress_text = (
+                        "\n".join(progress_lines) +
+                        f"\n\n/stop untuk hentikan"
+                    )
+
                 try:
-                    await sent_msg.edit_text(status)
+                    await sent_msg.edit_text(progress_text)
                 except Exception:
                     pass
 
@@ -1823,6 +2323,12 @@ class TelegramBot:
                     tool_calls=raw_tc,
                 ))
 
+                # Initialize tool history
+                if not hasattr(self, '_tool_history'):
+                    self._tool_history = {}
+                if user_id not in self._tool_history:
+                    self._tool_history[user_id] = []
+
                 # Execute each tool
                 for tc in response.tool_calls:
                     log.info(f"Tool exec: {tc.name} (agent={agent_id})")
@@ -1833,32 +2339,40 @@ class TelegramBot:
                     except json.JSONDecodeError:
                         args = {}
 
+                    preview = _get_tool_preview(tc.name, args)
+
                     if tc.name == "delegate_task":
-                        # Delegation to another agent (shared budget)
+                        # Delegation to another agent — runs in BACKGROUND
+                        # so Wulan stays available for chat
+                        import asyncio
                         target_id = args.get("agent_id", "")
                         task_desc = args.get("task", "")
                         target_agent = self.config.get_agent(target_id)
                         target_name = target_agent.name if target_agent else target_id
 
-                        try:
-                            await sent_msg.edit_text(
-                                f"Delegating to {target_name}..."
-                            )
-                        except Exception:
-                            pass
+                        # Launch background delegation with watch mode
+                        asyncio.create_task(self._bg_delegate(
+                            from_agent=agent_id, target_id=target_id,
+                            target_name=target_name, task_desc=task_desc,
+                            chat_id=chat_id, user_id=user_id, session=session,
+                        ))
+                        log.info(f"Background delegation: {agent_id} -> {target_id}")
 
-                        remaining = max_iterations - iteration - 1
-                        result_text, child_used = await self.manager.delegate(
-                            agent_id, target_id, user_id, task_desc,
-                            chat_id=chat_id,
-                            remaining_budget=remaining,
-                        )
-                        # Deduct child iterations from parent budget
-                        iteration += child_used
+                        # Return immediately — Wulan can keep chatting
                         messages.append(Message(
-                            role="tool", content=result_text,
+                            role="tool",
+                            content=f"Delegasi ke {target_name} sudah dimulai di background. "
+                                    f"{target_name} sedang mengerjakan: {task_desc[:100]}. "
+                                    f"Hasilnya akan dikirim otomatis ke chat. "
+                                    f"User bisa /mute untuk stop monitoring, /watch untuk lihat lagi, "
+                                    f"/stop untuk hentikan kerjaan {target_name}.",
                             tool_call_id=tc.id, name=tc.name,
                         ))
+                        self._tool_history.setdefault(user_id, []).append({
+                            "preview": f"📤 → {target_name}: {task_desc[:50]}",
+                            "output": "running in background",
+                            "ok": True,
+                        })
                     else:
                         # Regular tool execution
                         result = await execute_tool(tc.name, args, chat_id,
@@ -1867,6 +2381,20 @@ class TelegramBot:
                             role="tool", content=result.output,
                             tool_call_id=tc.id, name=tc.name,
                         ))
+                        snippet = _get_output_snippet(tc.name, result.output,
+                                                       result.success)
+                        self._tool_history[user_id].append({
+                            "preview": preview,
+                            "output": snippet,
+                            "ok": result.success,
+                        })
+
+                # Check interrupt after tools
+                if self._interrupted.get(user_id):
+                    self._interrupted.pop(user_id, None)
+                    await sent_msg.edit_text("⚡ Task dihentikan oleh user.")
+                    self.tasks.fail_task(user_id, "interrupted")
+                    return
 
             # Exceeded max iterations
             await sent_msg.edit_text(
@@ -1909,6 +2437,17 @@ class TelegramBot:
             return
 
         agent_id = self._get_agent_id(update.effective_user.id)
+
+        # Token budget pre-check
+        from core.token_guard import get_token_guard
+        guard = get_token_guard()
+        budget_ok, budget_remaining = guard.check_budget(agent_id)
+        if not budget_ok:
+            await update.message.reply_text(
+                "⛔ Token budget habis untuk jam ini. Coba lagi nanti ya."
+            )
+            return
+
         session = self.manager.get_session(agent_id, user_id)
         provider_name, model = self.manager.get_agent_model(session)
 
@@ -1940,13 +2479,31 @@ class TelegramBot:
             except Exception:
                 pass
 
-        # Check if agent has tools — use tool loop instead of streaming
+        # Dual-model routing: if agent has chat_model, use it for simple messages
+        # Complex messages (tool-needing) → primary model with tool loop
+        # Simple messages (chat) → chat_model, streaming, no tools
         from core.tools import get_agent_tools
         tools = get_agent_tools(agent_id)
+
         if tools and not resume_from:
-            await self._run_tool_loop(update, user_id, session,
-                                       agent_id, provider_name, model, tools)
-            return
+            agent_cfg = self.config.get_agent(agent_id)
+            use_chat_model = False
+
+            if agent_cfg and agent_cfg.chat_model and agent_cfg.chat_provider:
+                from core.smart_routing import is_simple_message
+                if is_simple_message(prompt):
+                    # Simple message → cheap chat model, skip tool loop
+                    chat_prov = self.config.get_provider(agent_cfg.chat_provider)
+                    if chat_prov and chat_prov.api_key:
+                        provider_name = agent_cfg.chat_provider
+                        model = agent_cfg.chat_model
+                        use_chat_model = True
+                        log.info(f"Dual-model: simple msg → {provider_name}/{model}")
+
+            if not use_chat_model:
+                await self._run_tool_loop(update, user_id, session,
+                                           agent_id, provider_name, model, tools)
+                return
 
         # Create task
         task = self.tasks.create_task(user_id, agent_id, prompt,
@@ -1959,8 +2516,28 @@ class TelegramBot:
         from core.context_compressor import compress_context
         agent_cfg = self.config.get_agent(agent_id)
         max_ctx = agent_cfg.max_context_tokens if agent_cfg else 100000
+        raw_messages = session.get_messages()
+
+        # If using chat_model, strip tool-related messages from context
+        # to prevent DeepSeek from generating DSML tool-call markup
+        if agent_cfg and agent_cfg.chat_model and model == agent_cfg.chat_model:
+            raw_messages = [
+                m for m in raw_messages
+                if m.role != "tool" and not getattr(m, 'tool_calls', None)
+            ]
+            # Also strip DSML from any assistant messages in history
+            cleaned = []
+            for m in raw_messages:
+                if m.role == "assistant" and m.content and '｜DSML｜' in m.content:
+                    clean_content = _strip_dsml(m.content)
+                    if clean_content:
+                        cleaned.append(Message(role=m.role, content=clean_content))
+                else:
+                    cleaned.append(m)
+            raw_messages = cleaned
+
         task_messages = await compress_context(
-            self.config, provider_name, model, session.get_messages(),
+            self.config, provider_name, model, raw_messages,
             max_tokens=max_ctx,
         )
         if resume_from and resume_from.partial_response:
@@ -2017,6 +2594,11 @@ class TelegramBot:
                         last_edit_len = len(full_text)
                     except Exception:
                         pass
+
+            # Strip DSML markup that DeepSeek may emit as text
+            full_text = _strip_dsml(full_text)
+            if not full_text:
+                full_text = "(Tidak ada respons teks)"
 
             # Final update
             if full_text and not task.should_cancel:
@@ -2217,6 +2799,10 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("rollback", self._cmd_rollback))
         self.app.add_handler(CommandHandler("profile", self._cmd_profile))
         self.app.add_handler(CommandHandler("rename", self._cmd_rename))
+        self.app.add_handler(CommandHandler("tokenguard", self._cmd_tokenguard))
+        self.app.add_handler(CommandHandler("stop", self._cmd_stop))
+        self.app.add_handler(CommandHandler("watch", self._cmd_watch))
+        self.app.add_handler(CommandHandler("mute", self._cmd_mute))
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
         self.app.add_handler(
             MessageHandler(filters.PHOTO, self._handle_photo)
@@ -2251,6 +2837,10 @@ class TelegramBot:
             BotCommand("rollback", "Rollback ke checkpoint"),
             BotCommand("profile", "Lihat profil user"),
             BotCommand("rename", "Ganti nama agent"),
+            BotCommand("tokenguard", "Token spike & budget monitor"),
+            BotCommand("stop", "Hentikan task/delegasi yang berjalan"),
+            BotCommand("watch", "Lihat live progress delegasi"),
+            BotCommand("mute", "Stop monitoring, agent tetap kerja"),
         ])
 
         log.info("Telegram bot configured")

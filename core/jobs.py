@@ -107,6 +107,29 @@ async def learn_from_history(scheduler):
         log.error(f"Learning job error: {e}")
 
 
+async def token_guard_refresh(scheduler):
+    """Refresh token guard moving averages and check for anomalies."""
+    try:
+        from core.token_guard import get_token_guard
+        guard = get_token_guard()
+        guard.refresh_moving_averages()
+
+        # Check for any agents currently over budget
+        status = guard.get_status()
+        alerts = []
+        for agent_id, data in status.get("agents", {}).items():
+            if data["budget"] > 0 and data["budget_pct"] > 80:
+                alerts.append(
+                    f"  ⚠️ {agent_id}: {data['current_hour_tokens']:,}/"
+                    f"{data['budget']:,} tokens ({data['budget_pct']:.0f}%)"
+                )
+        if alerts:
+            msg = "🛡️ Token Guard — High Usage\n" + "\n".join(alerts)
+            await scheduler.notify(msg)
+    except Exception as e:
+        log.warning(f"Token guard refresh error: {e}")
+
+
 async def cache_and_knowledge_cleanup(scheduler):
     """Clean expired cache entries and decay old knowledge."""
     try:
@@ -147,6 +170,9 @@ def register_jobs(scheduler, config=None):
     async def _cache_cleanup():
         await cache_and_knowledge_cleanup(scheduler)
 
+    async def _token_guard():
+        await token_guard_refresh(scheduler)
+
     scheduler.add_job("balance_alert", interval=sched_cfg.balance_alert_interval,
                        func=_balance_alert, enabled=sched_cfg.enabled)
 
@@ -162,3 +188,7 @@ def register_jobs(scheduler, config=None):
 
     scheduler.add_job("cache_cleanup", interval=86400,
                        func=_cache_cleanup, enabled=sched_cfg.enabled)
+
+    # Token guard — refresh averages + check anomalies every 5 min
+    scheduler.add_job("token_guard", interval=300,
+                       func=_token_guard, enabled=sched_cfg.enabled)
