@@ -136,12 +136,10 @@ agents:
     name: Wulan
     model: gpt-5.4
     provider: openai
-    chat_model: deepseek-chat     # murah buat ngobrol biasa
-    chat_provider: deepseek       # provider langsung
     fallbacks:
-      - openai/gpt-5.2
       - openai/gpt-4.1
-      - sumopod/gpt-5.2
+      - zai/glm-5-turbo
+      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent1.md
     channels: [telegram]
     max_context_tokens: 128000
@@ -149,10 +147,10 @@ agents:
 
   - id: agent2
     name: Rani
-    model: sumopod/gpt-5.2
-    provider: sumopod
+    model: gpt-4.1-mini
+    provider: openai
     fallbacks:
-      - sumopod/gemini/gemini-2.5-flash
+      - zai/glm-5
       - deepseek/deepseek-chat
     system_prompt_file: prompts/agent2.md
     channels: []
@@ -174,12 +172,11 @@ agents:
 
   - id: agent4
     name: Bima
-    model: sumopod/gpt-5.2-codex
-    provider: sumopod
+    model: deepseek-chat
+    provider: deepseek
     fallbacks:
-      - sumopod/gpt-5.1-codex
+      - openai/gpt-5.4
       - zai/glm-5-turbo
-      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent4.md
     channels: []
     max_context_tokens: 128000
@@ -188,11 +185,11 @@ agents:
   # Backup / Failover agents
   - id: agent5
     name: Wulan B
-    model: sumopod/gpt-5-mini
-    provider: sumopod
+    model: gpt-4.1-mini
+    provider: openai
     fallbacks:
-      - sumopod/gemini/gemini-2.0-flash
-      - sumopod/seed-2-0-pro
+      - zai/glm-5-turbo
+      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent5.md
     channels: []
     max_context_tokens: 128000
@@ -200,11 +197,11 @@ agents:
 
   - id: agent6
     name: Rani B
-    model: sumopod/gemini/gemini-3-flash-preview
-    provider: sumopod
+    model: glm-5
+    provider: zai
     fallbacks:
-      - sumopod/gpt-5-mini
-      - zai/glm-5
+      - openai/gpt-4.1-mini
+      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent6.md
     channels: []
     max_context_tokens: 1000000
@@ -212,11 +209,11 @@ agents:
 
   - id: agent7
     name: Dewi B
-    model: sumopod/gemini/gemini-2.5-pro
-    provider: sumopod
+    model: glm-4.7
+    provider: zai
     fallbacks:
-      - sumopod/kimi-k2-thinking
       - deepseek/deepseek-reasoner
+      - deepseek/deepseek-chat
     system_prompt_file: prompts/agent7.md
     channels: []
     max_context_tokens: 1000000
@@ -227,7 +224,7 @@ agents:
     model: glm-5-turbo
     provider: zai
     fallbacks:
-      - sumopod/gpt-5.1-codex-mini
+      - zai/glm-5
       - deepseek/deepseek-chat
     system_prompt_file: prompts/agent8.md
     channels: []

@@ -11,6 +11,7 @@ from telegram.ext import (
     filters, ContextTypes,
 )
 from telegram.constants import ChatAction, ParseMode
+from telegram.error import RetryAfter
 
 from core.config import PawangConfig
 from core.database import get_db
@@ -27,7 +28,7 @@ from providers.base import Message, ThinkingConfig
 from skills.manager import SkillManager
 
 
-EDIT_INTERVAL = 1.5
+EDIT_INTERVAL = 3.0
 EDIT_CHAR_THRESHOLD = 80
 MODELS_PER_PAGE = 8  # models per page in inline keyboard
 
@@ -55,6 +56,76 @@ _DSML_PATTERN = re.compile(
 )
 _DSML_PARTIAL = re.compile(r'<｜DSML｜[^>]*>.*', re.DOTALL)
 
+# Patterns that indicate chat model tried to do something it can't
+# → should escalate to tool-capable model
+_ESCALATION_PATTERNS = re.compile(
+    r'delegate_task|/ask\s+agent|'
+    r'memanggil\s+tool|panggil\s+tool|'
+    r'saya\s+tidak\s+bisa\s+(memanggil|delegate|generate|membuat\s+gambar|membuat\s+video)|'
+    r'tidak\s+punya\s+akses\s+tool|'
+    r'(?:mode\s+chat|chat\s+mode).*tidak\s+bisa|'
+    r'perlu\s+tool|butuh\s+tool|'
+    r'coba\s+(tulis\s+ulang|ulangi)|'
+    # Chat model giving fake bash instructions instead of using tools
+    r'clawhub\s+(install|list|run|search)|'
+    r'jalankan\s+(command|di\s+terminal)|'
+    r'silakan\s+jalankan\s+command',
+    re.IGNORECASE,
+)
+
+
+def _needs_escalation(text: str) -> bool:
+    """Check if chat model response indicates it needs tool-capable model."""
+    return bool(_ESCALATION_PATTERNS.search(text))
+
+
+async def _safe_edit(msg, text: str, max_retries: int = 2):
+    """Edit message with RetryAfter handling. Edits first 4096 chars."""
+    chunk = text[:4096]
+    for attempt in range(max_retries + 1):
+        try:
+            await msg.edit_text(chunk)
+            return True
+        except RetryAfter as e:
+            wait = int(e.retry_after) + 1
+            if attempt < max_retries:
+                log.warning(f"Flood control, waiting {wait}s (attempt {attempt+1})")
+                await asyncio.sleep(wait)
+            else:
+                log.warning(f"Flood control, giving up after {max_retries} retries")
+                return False
+        except Exception:
+            return False
+
+
+async def _send_long_text(msg, chat, text: str):
+    """Edit msg with first chunk, send remaining chunks as new messages.
+
+    Splits on 4096-char boundary. Ensures no text is lost.
+    """
+    if not text:
+        return
+    ok = await _safe_edit(msg, text[:4096])
+    if not ok:
+        # Edit failed — send everything as new messages
+        remaining = text
+    else:
+        remaining = text[4096:]
+
+    while remaining:
+        chunk = remaining[:4096]
+        remaining = remaining[4096:]
+        try:
+            await chat.send_message(chunk)
+        except RetryAfter as e:
+            await asyncio.sleep(int(e.retry_after) + 1)
+            try:
+                await chat.send_message(chunk)
+            except Exception:
+                log.warning(f"Lost {len(chunk)} chars after flood control")
+        except Exception:
+            log.warning(f"Failed to send chunk ({len(chunk)} chars)")
+
 
 def _strip_dsml(text: str) -> str:
     """Strip DeepSeek DSML tool-call markup that leaks into text responses."""
@@ -65,6 +136,48 @@ def _strip_dsml(text: str) -> str:
     # Strip partial/unclosed DSML blocks
     text = _DSML_PARTIAL.sub('', text)
     return text.strip()
+
+
+def _clean_delegation_labels(messages: list, strip_tools: bool = False) -> list:
+    """Clean delegation labels and DSML from message history.
+
+    Prevents LLM from adopting delegated agent's identity.
+    strip_tools=True also removes tool/tool_calls messages (for chat mode).
+    """
+    if strip_tools:
+        messages = [
+            m for m in messages
+            if m.role != "tool" and not getattr(m, 'tool_calls', None)
+        ]
+
+    cleaned = []
+    for m in messages:
+        content = m.content or ""
+        if m.role == "assistant" and content:
+            # Strip DSML markup
+            if '｜DSML｜' in content:
+                content = _strip_dsml(content)
+            # Strip delegation labels like "[Dewi]: ..." or "[Rani B]:"
+            if content.startswith("[") and "]: " in content[:50]:
+                content = content[content.index("]: ") + 3:]
+            # Strip delegation headers like "✅ Dewi selesai (3 steps):\n\n"
+            if content.startswith(("✅ ", "❌ ")) and ":\n\n" in content[:80]:
+                content = content[content.index(":\n\n") + 3:]
+            # Strip "(Delegasi ke X selesai)\n" prefix
+            if content.startswith("(Delegasi ke ") and ")\n" in content[:60]:
+                content = content[content.index(")\n") + 2:]
+            if content.strip():
+                cleaned.append(Message(role=m.role, content=content))
+        elif m.role == "user":
+            # Strip delegation prefixes from user messages
+            if content.startswith("[Delegated to "):
+                idx = content.find("]: ")
+                if idx > 0:
+                    content = content[idx + 3:]
+            cleaned.append(Message(role=m.role, content=content))
+        else:
+            cleaned.append(m)
+    return cleaned
 
 
 def _get_tool_preview(name: str, args: dict) -> str:
@@ -955,14 +1068,7 @@ class TelegramBot:
                         f"[{target_agent.name}]: {response}")
 
         text = f"{target_agent.name}:\n\n{response}"
-        if len(text) <= 4096:
-            await msg.edit_text(text)
-        else:
-            await msg.edit_text(text[:4096])
-            remaining = text[4096:]
-            while remaining:
-                await update.message.reply_text(remaining[:4096])
-                remaining = remaining[4096:]
+        await _send_long_text(msg, update.effective_chat, text)
 
     async def _cmd_btw(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Quick side question — doesn't touch main conversation history.
@@ -1008,11 +1114,16 @@ class TelegramBot:
             await update.message.reply_text("No provider available.")
             return
 
+        agent_id = self._get_agent_id(update.effective_user.id)
+        agent_cfg = self.config.get_agent(agent_id)
+        agent_name = agent_cfg.name if agent_cfg else "Assistant"
+
         try:
             messages = [
                 Message(role="system", content=(
-                    "You are a quick assistant. Answer concisely in 1-3 sentences. "
-                    "Match the user's language (Indonesian/English)."
+                    f"Kamu adalah {agent_name}. "
+                    "Jawab singkat 1-3 kalimat. "
+                    "Ikuti bahasa user (Indonesia/English)."
                 )),
                 Message(role="user", content=question),
             ]
@@ -1028,7 +1139,8 @@ class TelegramBot:
 
             header = f"[btw — {fast_model}]\n\n"
             text = header + response.text
-            await update.message.reply_text(text[:4096])
+            for i in range(0, len(text), 4096):
+                await update.message.reply_text(text[i:i+4096])
 
             # Record usage but NOT in session history
             db = get_db()
@@ -1286,21 +1398,14 @@ class TelegramBot:
 
             header = f"[MoA — {len(refs)} models]\n\n"
             text = header + result
-            if len(text) <= 4096:
-                await msg.edit_text(text)
-            else:
-                await msg.edit_text(text[:4096])
-                remaining = text[4096:]
-                while remaining:
-                    await update.message.reply_text(remaining[:4096])
-                    remaining = remaining[4096:]
+            await _send_long_text(msg, update.effective_chat, text)
 
             db = get_db()
             db.record_usage(provider_name, model, agent_id, user_id,
                             len(question) // 4, len(result) // 4, 0)
         except Exception as e:
             log.error(f"MoA error: {e}")
-            await msg.edit_text(f"MoA error: {str(e)[:200]}")
+            await _safe_edit(msg, f"MoA error: {str(e)[:200]}")
 
     async def _cmd_checkpoint(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Save or list conversation checkpoints.
@@ -1432,10 +1537,7 @@ class TelegramBot:
 
         if result:
             text = f"[Vision Analysis]\n\n{result}"
-            if len(text) <= 4096:
-                await msg.edit_text(text)
-            else:
-                await msg.edit_text(text[:4096])
+            await _send_long_text(msg, update.effective_chat, text)
         else:
             await msg.edit_text("Tidak ada vision model yang tersedia. Pastikan Google/OpenAI API key terpasang.")
 
@@ -1990,11 +2092,16 @@ class TelegramBot:
 
         await update.message.chat.send_action(ChatAction.TYPING)
 
+        agent_id = self._get_agent_id(update.effective_user.id)
+        agent_cfg = self.config.get_agent(agent_id)
+        agent_name = agent_cfg.name if agent_cfg else "Assistant"
+
         try:
             messages = [
                 Message(role="system", content=(
-                    "Answer concisely in 1-3 sentences. "
-                    "Match the user's language. This is a side question."
+                    f"Kamu adalah {agent_name}. "
+                    "Jawab singkat 1-3 kalimat. "
+                    "Ikuti bahasa user (Indonesia/English). Ini pertanyaan sampingan."
                 )),
                 Message(role="user", content=update.message.text),
             ]
@@ -2089,6 +2196,8 @@ class TelegramBot:
                 )
                 try:
                     await progress_msg.edit_text(text[:4096])
+                except RetryAfter:
+                    pass  # skip this progress update, next one will catch up
                 except Exception:
                     pass
 
@@ -2116,10 +2225,10 @@ class TelegramBot:
                     text=result_msg[i:i+4096],
                 )
 
-            # Save to session history
+            # Save to session history (no identity label to avoid confusion)
             self.manager.save_message(
                 session, "assistant",
-                f"[{target_name}]: {result_text}",
+                f"(Delegasi ke {target_name} selesai)\n{result_text}",
                 model="delegation", provider="internal",
             )
 
@@ -2198,6 +2307,9 @@ class TelegramBot:
         agent_cfg = self.config.get_agent(agent_id)
         max_iterations = agent_cfg.max_iterations if agent_cfg else 15
 
+        # Clean delegation labels to prevent identity confusion
+        messages = _clean_delegation_labels(messages, strip_tools=False)
+
         # Compress context if approaching limit
         from core.context_compressor import compress_context
         max_ctx = agent_cfg.max_context_tokens if agent_cfg else 100000
@@ -2224,14 +2336,7 @@ class TelegramBot:
                 if not response.tool_calls:
                     # Final text response — display it
                     final_text = _strip_dsml(response.text) or "(empty response)"
-                    if len(final_text) <= 4096:
-                        await sent_msg.edit_text(final_text)
-                    else:
-                        await sent_msg.edit_text(final_text[:4096])
-                        remaining = final_text[4096:]
-                        while remaining:
-                            await update.message.reply_text(remaining[:4096])
-                            remaining = remaining[4096:]
+                    await _send_long_text(sent_msg, update.effective_chat, final_text)
 
                     # Save to session & record usage
                     self.tasks.complete_task(user_id, final_text)
@@ -2269,7 +2374,7 @@ class TelegramBot:
                 # Check interrupt
                 if self._interrupted.get(user_id):
                     self._interrupted.pop(user_id, None)
-                    await sent_msg.edit_text("⚡ Task dihentikan oleh user.")
+                    await _safe_edit(sent_msg, "⚡ Task dihentikan oleh user.")
                     self.tasks.fail_task(user_id, "interrupted")
                     return
 
@@ -2309,6 +2414,8 @@ class TelegramBot:
 
                 try:
                     await sent_msg.edit_text(progress_text)
+                except RetryAfter:
+                    pass  # skip progress update on flood control
                 except Exception:
                     pass
 
@@ -2392,12 +2499,12 @@ class TelegramBot:
                 # Check interrupt after tools
                 if self._interrupted.get(user_id):
                     self._interrupted.pop(user_id, None)
-                    await sent_msg.edit_text("⚡ Task dihentikan oleh user.")
+                    await _safe_edit(sent_msg, "⚡ Task dihentikan oleh user.")
                     self.tasks.fail_task(user_id, "interrupted")
                     return
 
             # Exceeded max iterations
-            await sent_msg.edit_text(
+            await _safe_edit(sent_msg,
                 "[Error: terlalu banyak tool iterations, silakan coba lagi]"
             )
             self.tasks.fail_task(user_id, "max tool iterations")
@@ -2415,14 +2522,13 @@ class TelegramBot:
 
             fallback_ok = await self._try_failover(agent_id, session, update)
             if not fallback_ok:
-                try:
-                    await sent_msg.edit_text(
-                        f"Error: {type(e).__name__}: {str(e)[:200]}"
-                    )
-                except Exception:
-                    await update.message.reply_text(
-                        f"Error: {type(e).__name__}: {str(e)[:200]}"
-                    )
+                err_text = f"Error: {type(e).__name__}: {str(e)[:200]}"
+                ok = await _safe_edit(sent_msg, err_text)
+                if not ok:
+                    try:
+                        await update.message.reply_text(err_text)
+                    except Exception:
+                        pass
             self._task_messages.pop(user_id, None)
 
     async def _run_task(self, update: Update, user_id: str, resume_from=None):
@@ -2472,7 +2578,8 @@ class TelegramBot:
                 if cached:
                     self.manager.save_message(session, "assistant", cached,
                                               model="cache", provider="local")
-                    await update.message.reply_text(cached[:4096])
+                    for i in range(0, len(cached), 4096):
+                        await update.message.reply_text(cached[i:i+4096])
                     await hooks.emit("message:sent", user_id=user_id, agent_id=agent_id,
                                      text=cached[:200])
                     return
@@ -2501,6 +2608,7 @@ class TelegramBot:
                         log.info(f"Dual-model: simple msg → {provider_name}/{model}")
 
             if not use_chat_model:
+                log.info(f"Dual-model: complex msg → {provider_name}/{model} (tool loop)")
                 await self._run_tool_loop(update, user_id, session,
                                            agent_id, provider_name, model, tools)
                 return
@@ -2518,23 +2626,12 @@ class TelegramBot:
         max_ctx = agent_cfg.max_context_tokens if agent_cfg else 100000
         raw_messages = session.get_messages()
 
-        # If using chat_model, strip tool-related messages from context
-        # to prevent DeepSeek from generating DSML tool-call markup
+        # If using chat_model, clean context (strip tools + delegation labels)
         if agent_cfg and agent_cfg.chat_model and model == agent_cfg.chat_model:
-            raw_messages = [
-                m for m in raw_messages
-                if m.role != "tool" and not getattr(m, 'tool_calls', None)
-            ]
-            # Also strip DSML from any assistant messages in history
-            cleaned = []
-            for m in raw_messages:
-                if m.role == "assistant" and m.content and '｜DSML｜' in m.content:
-                    clean_content = _strip_dsml(m.content)
-                    if clean_content:
-                        cleaned.append(Message(role=m.role, content=clean_content))
-                else:
-                    cleaned.append(m)
-            raw_messages = cleaned
+            raw_messages = _clean_delegation_labels(raw_messages, strip_tools=True)
+        else:
+            # Tool-capable model: still clean delegation labels to prevent identity confusion
+            raw_messages = _clean_delegation_labels(raw_messages, strip_tools=False)
 
         task_messages = await compress_context(
             self.config, provider_name, model, raw_messages,
@@ -2592,6 +2689,10 @@ class TelegramBot:
                         await sent_msg.edit_text(full_text[:4096])
                         last_edit = now
                         last_edit_len = len(full_text)
+                    except RetryAfter as e:
+                        # Back off — skip edits until retry_after expires
+                        last_edit = now + int(e.retry_after)
+                        log.warning(f"Stream edit flood control, backing off {e.retry_after}s")
                     except Exception:
                         pass
 
@@ -2600,28 +2701,32 @@ class TelegramBot:
             if not full_text:
                 full_text = "(Tidak ada respons teks)"
 
-            # Final update
+            # Auto-escalate: if chat model tried to delegate/use tools,
+            # re-run with tool-capable model
+            is_chat_mode = (agent_cfg and agent_cfg.chat_model
+                            and model == agent_cfg.chat_model)
+            if is_chat_mode and not task.should_cancel and _needs_escalation(full_text):
+                log.info(f"Auto-escalate: chat model tried tools, switching to "
+                         f"{agent_cfg.provider}/{agent_cfg.model}")
+                await _safe_edit(sent_msg, "🔄 Switching to tool mode...")
+                self.tasks.fail_task(user_id, "escalated")
+                from core.tools import get_agent_tools
+                tools = get_agent_tools(agent_id)
+                if tools:
+                    await self._run_tool_loop(
+                        update, user_id, session, agent_id,
+                        agent_cfg.provider, agent_cfg.model, tools,
+                    )
+                    return
+
+            # Final update — split long text into multiple messages
             if full_text and not task.should_cancel:
-                try:
-                    if len(full_text) <= 4096:
-                        await sent_msg.edit_text(full_text)
-                    else:
-                        await sent_msg.edit_text(full_text[:4096])
-                        remaining = full_text[4096:]
-                        while remaining:
-                            await update.message.reply_text(remaining[:4096])
-                            remaining = remaining[4096:]
-                except Exception as e:
-                    log.warning(f"Final edit failed: {e}")
+                await _send_long_text(sent_msg, update.effective_chat, full_text)
 
             if task.should_cancel:
                 # Task was paused/cancelled — show what we have
                 if full_text:
-                    try:
-                        display = full_text[:4000] + "\n\n[...paused]"
-                        await sent_msg.edit_text(display)
-                    except Exception:
-                        pass
+                    await _safe_edit(sent_msg, full_text[:4000] + "\n\n[...paused]")
             else:
                 # Task completed normally
                 self.tasks.complete_task(user_id, full_text)
@@ -2678,7 +2783,8 @@ class TelegramBot:
                 if local_resp:
                     self.manager.save_message(session, "assistant", local_resp,
                                               model="local", provider="local")
-                    await update.message.reply_text(local_resp[:4096])
+                    for i in range(0, len(local_resp), 4096):
+                        await update.message.reply_text(local_resp[i:i+4096])
                     self._task_messages.pop(user_id, None)
                     return
             except Exception:

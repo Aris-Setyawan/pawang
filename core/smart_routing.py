@@ -8,31 +8,106 @@ import re
 from typing import Optional
 from core.logger import log
 
-# Keywords that indicate complex tasks → always use primary model
-_COMPLEX_KEYWORDS = {
-    "debug", "implement", "refactor", "patch", "traceback", "exception",
-    "error", "analyze", "investigate", "architecture", "design", "compare",
-    "benchmark", "optimize", "review", "terminal", "pytest", "test",
-    "plan", "delegate", "docker", "kubernetes", "deploy", "migrate",
-    "coding", "code", "script", "function", "class", "database",
-    "sql", "api", "server", "config", "install", "setup", "cli",
-    # Indonesian variations — jangan sampai lolos smart routing
-    "buatkan", "buatin", "buat", "bikin", "bikinin", "tolong",
-    "tulis", "tuliskan", "perbaiki", "benerin", "fixkan",
-    "jelaskan", "jelasin", "analisa", "cek", "monitor",
-    "hapus", "ubah", "ganti", "tambah", "tambahin", "update",
-    "kerjakan", "kerjain", "selesaikan", "selesain",
+# Level 1: PASTI butuh tools — selalu masuk tool-capable model
+_TOOL_KEYWORDS = {
+    # Delegation / orchestration
+    "delegate", "delegasi",
+    # Creative generation — butuh tool generate_image/video/audio
+    "gambar", "image", "video", "audio", "musik", "music",
+    "foto", "photo", "picture", "draw", "render", "lukis",
+    "generate", "generasi",
+    # Coding — butuh delegate ke agent lain
+    "coding", "code", "script", "debug", "refactor", "implement",
+    "patch", "traceback", "exception", "pytest",
+    "architecture", "deploy", "migrate", "docker", "kubernetes",
+    # File / system ops — butuh run_bash, file_read, etc
+    "terminal", "bash", "pip", "npm",
+    # Explicit task requests
+    "buatkan", "buatin", "bikinin",
+    # Skill hub
+    "skill", "clawhub", "hermes",
+    # Install / execute — butuh tool skill_hub atau run_bash
+    "install", "uninstall",
+    "jalankan", "jalanin", "eksekusi", "execute", "run",
+    # Balance / monitoring — butuh tool check_balances
+    "balance", "saldo",
 }
 
+# Level 2: MUNGKIN butuh tools — hanya complex jika dikombinasi
+# dengan kata kerja perintah atau kalimat panjang (>6 kata)
+_SOFT_KEYWORDS = {
+    "buat", "bikin", "tolong", "cari", "carikan", "search",
+    "tulis", "tuliskan", "perbaiki", "benerin", "fixkan",
+    "jelaskan", "jelasin", "analisa", "analyze", "investigate",
+    "hapus", "ubah", "ganti", "tambah", "tambahin",
+    "kerjakan", "kerjain", "selesaikan", "selesain",
+    "download", "unduh", "setup",
+    "compare", "benchmark", "optimize", "review",
+    "database", "sql", "api", "server", "config",
+    "function", "class", "cli", "test", "plan",
+    "design", "monitor", "error",
+    "cek", "update",
+}
+
+# Fuzzy targets: keywords worth fuzzy-matching (high-value tool triggers)
+# Only keywords where typos are common and misrouting is costly
+_FUZZY_TARGETS = [
+    "install", "uninstall", "balance", "generate", "delegate",
+    "jalankan", "jalanin", "eksekusi", "execute",
+    "gambar", "video", "audio", "skill",
+]
+
+
+def _fuzzy_match_keywords(words: set[str]) -> bool:
+    """Check if any word is a close match to a tool keyword (Levenshtein ≤ 2).
+
+    Only checks words with 4+ chars against high-value keywords to avoid
+    false positives on short words.
+    """
+    for word in words:
+        if len(word) < 4:
+            continue
+        for target in _FUZZY_TARGETS:
+            if len(target) < 4:
+                continue
+            # Quick prefix check: if word starts with first 3 chars of target
+            if word[:3] == target[:3] and abs(len(word) - len(target)) <= 2:
+                # Simple Levenshtein distance check
+                if _lev_distance(word, target) <= 2:
+                    return True
+    return False
+
+
+def _lev_distance(a: str, b: str) -> int:
+    """Compute Levenshtein distance between two strings."""
+    if len(a) < len(b):
+        return _lev_distance(b, a)
+    if len(b) == 0:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1]
+        for j, cb in enumerate(b):
+            curr.append(min(
+                prev[j + 1] + 1,      # deletion
+                curr[j] + 1,           # insertion
+                prev[j] + (ca != cb),  # substitution
+            ))
+        prev = curr
+    return prev[len(b)]
+
+
 # Max thresholds for "simple" messages
-MAX_SIMPLE_CHARS = 160
-MAX_SIMPLE_WORDS = 28
+MAX_SIMPLE_CHARS = 200
+MAX_SIMPLE_WORDS = 35
 
 
 def is_simple_message(text: str) -> bool:
     """Check if a message is simple enough to route to a cheap model.
 
-    Conservative: only routes if message is clearly simple.
+    Two-level keyword system:
+    - _TOOL_KEYWORDS: always complex (definitely needs tools)
+    - _SOFT_KEYWORDS: only complex if message has >6 words (indicates a task, not a question)
     """
     if not text:
         return False
@@ -57,11 +132,26 @@ def is_simple_message(text: str) -> bool:
     if "http://" in text or "https://" in text or "www." in text:
         return False
 
-    # Check for complex keywords
     words = set(re.findall(r'\w+', text.lower()))
-    if words & _COMPLEX_KEYWORDS:
+    word_count = len(text.split())
+
+    # Level 1: hard keywords → always complex
+    if words & _TOOL_KEYWORDS:
+        log.debug(f"Routing: COMPLEX (tool keyword) — {text[:60]}")
         return False
 
+    # Level 1b: fuzzy match — catch common typos for tool keywords
+    # Check if any word in the message is a close prefix/substring of a tool keyword
+    if _fuzzy_match_keywords(words):
+        log.debug(f"Routing: COMPLEX (fuzzy keyword) — {text[:60]}")
+        return False
+
+    # Level 2: soft keywords → only complex if looks like a command (>6 words)
+    if words & _SOFT_KEYWORDS and word_count > 6:
+        log.debug(f"Routing: COMPLEX (soft keyword + long) — {text[:60]}")
+        return False
+
+    log.debug(f"Routing: SIMPLE — {text[:60]}")
     return True
 
 

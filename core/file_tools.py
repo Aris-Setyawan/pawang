@@ -11,7 +11,7 @@ from core.logger import log
 
 # Allowed directories for file operations
 WORKSPACE_DIR = Path("/root/pawang/workspace")
-ALLOWED_ROOTS = [WORKSPACE_DIR, Path("/tmp")]
+ALLOWED_ROOTS = [WORKSPACE_DIR, Path("/workspace"), Path("/tmp")]
 
 
 def _is_allowed_path(path_str: str) -> tuple[bool, Path]:

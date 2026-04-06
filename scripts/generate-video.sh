@@ -8,8 +8,9 @@
 PROMPT="$1"
 CAPTION="${2:-Video AI}"
 CHAT_ID="${3:-613802669}"
-ENV_FILE="/root/pawang/.env"
-TG_SEND="/root/pawang/scripts/telegram-send.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/../.env"
+TG_SEND="${SCRIPT_DIR}/telegram-send.sh"
 
 if [ -z "$PROMPT" ]; then
   echo "Usage: generate-video.sh <prompt> [caption] [chat_id]" >&2
@@ -33,16 +34,23 @@ poll_jobs() {
   while [ $WAITED -lt $MAX ]; do
     sleep 12; WAITED=$((WAITED + 12))
     local POLL=$(curl -s "https://api.kie.ai/api/v1/jobs/recordInfo?taskId=$TASK" -H "Authorization: Bearer $KIEAI_KEY")
-    local STATUS=$(echo "$POLL" | python3 -c "import json,sys; d=json.load(sys.stdin); print((d.get('data') or {}).get('status',''))" 2>/dev/null)
+    local STATE=$(echo "$POLL" | python3 -c "import json,sys; d=json.load(sys.stdin); print((d.get('data') or {}).get('state',''))" 2>/dev/null)
     local URL=$(echo "$POLL" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-r=(d.get('data') or {}).get('response') or {}
-print(r.get('videoUrl','') or r.get('video_url','') or (r.get('videos') or [{}])[0].get('url',''))
+data=d.get('data') or {}
+rj=data.get('resultJson','')
+if rj:
+    import json as j2
+    r=j2.loads(rj)
+    urls=r.get('resultUrls',[])
+    print(urls[0] if urls else '')
+else:
+    print('')
 " 2>/dev/null)
-    echo "[poll] ${WAITED}s status=$STATUS" >&2
-    [ "$STATUS" = "fail" ] && return 1
-    if [ -n "$URL" ]; then echo "$URL"; return 0; fi
+    echo "[poll] ${WAITED}s state=$STATE" >&2
+    [ "$STATE" = "fail" ] && return 1
+    if [ "$STATE" = "success" ] && [ -n "$URL" ]; then echo "$URL"; return 0; fi
   done
   return 1
 }
@@ -96,7 +104,7 @@ gen_kling3() {
   [ -z "$KIEAI_KEY" ] && return 1
   local RESP=$(curl -s -X POST "https://api.kie.ai/api/v1/jobs/createTask" \
     -H "Authorization: Bearer $KIEAI_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"kling-3.0/video\",\"prompt\":\"$PROMPT\",\"duration\":5,\"aspect_ratio\":\"16:9\",\"mode\":\"std\"}")
+    -d "{\"model\":\"kling-3.0/video\",\"input\":{\"prompt\":\"$PROMPT\",\"duration\":\"5\",\"aspect_ratio\":\"16:9\",\"mode\":\"std\"}}")
   local TASK=$(echo "$RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('data',{}).get('taskId',''))" 2>/dev/null)
   [ -z "$TASK" ] && return 1
   local URL=$(poll_jobs "$TASK" 300)
@@ -109,7 +117,7 @@ gen_hailuo() {
   [ -z "$KIEAI_KEY" ] && return 1
   local RESP=$(curl -s -X POST "https://api.kie.ai/api/v1/jobs/createTask" \
     -H "Authorization: Bearer $KIEAI_KEY" -H "Content-Type: application/json" \
-    -d "{\"model\":\"hailuo/02-text-to-video-standard\",\"prompt\":\"$PROMPT\",\"duration\":6}")
+    -d "{\"model\":\"hailuo/02-text-to-video-standard\",\"input\":{\"prompt\":\"$PROMPT\",\"duration\":\"6\"}}")
   local TASK=$(echo "$RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('data',{}).get('taskId',''))" 2>/dev/null)
   [ -z "$TASK" ] && return 1
   local URL=$(poll_jobs "$TASK" 300)

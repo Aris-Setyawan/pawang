@@ -474,6 +474,32 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "skill_hub",
+            "description": (
+                "Browse dan install skill dari Hermes/ClawHub/OpenClaw skill marketplace. "
+                "Aksi: search (cari skill), browse (lihat kategori), list (skill terinstall), "
+                "install (install skill), uninstall (hapus), read (baca isi skill), info (detail)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "browse", "list", "install", "uninstall", "read", "info"],
+                        "description": "Aksi yang dilakukan",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Keyword pencarian atau nama kategori (untuk search/browse/install/read/info)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 
@@ -483,7 +509,8 @@ TOOL_DEFINITIONS = [
 AGENT_TOOLS = {
     "agent1": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather",
                "save_memory", "recall_memories", "delete_memory",
-               "python_exec", "wikipedia", "translate", "calculator", "code_search"],
+               "python_exec", "wikipedia", "translate", "calculator", "code_search",
+               "skill_hub"],
     "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
                "file_read", "file_write", "python_exec", "translate"],
     "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search",
@@ -493,7 +520,8 @@ AGENT_TOOLS = {
     # Backup agents mirror their primary
     "agent5": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather",
                "save_memory", "recall_memories", "delete_memory",
-               "python_exec", "wikipedia", "translate", "calculator", "code_search"],
+               "python_exec", "wikipedia", "translate", "calculator", "code_search",
+               "skill_hub"],
     "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
                "file_read", "file_write", "python_exec", "translate"],
     "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search",
@@ -836,6 +864,13 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
         path = arguments.get("path", "")
         file_type = arguments.get("file_type", "")
         return await _code_search(pattern, path, file_type)
+
+    elif name == "skill_hub":
+        from skills.hub import execute_skill_hub
+        action = arguments.get("action", "")
+        query = arguments.get("query", "")
+        result = await execute_skill_hub(action, query=query, name=query)
+        return ToolResult(name="skill_hub", output=result, success=True)
 
     elif name.startswith("mcp_"):
         # MCP tool call — route to MCP manager

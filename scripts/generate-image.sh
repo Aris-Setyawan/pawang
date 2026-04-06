@@ -10,8 +10,9 @@
 PROMPT="$1"
 CAPTION="${2:-$1}"
 CHAT_ID="${3:-613802669}"
-ENV_FILE="/root/pawang/.env"
-TG_SEND="/root/pawang/scripts/telegram-send.sh"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/../.env"
+TG_SEND="${SCRIPT_DIR}/telegram-send.sh"
 
 if [ -z "$PROMPT" ]; then
   echo "Usage: generate-image.sh <prompt> [caption] [chat_id]" >&2
