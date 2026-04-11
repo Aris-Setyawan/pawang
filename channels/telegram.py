@@ -530,7 +530,8 @@ class TelegramBot:
         "agent2": "\U0001f3a8 Creative",
         "agent3": "\U0001f4ca Analyst",
         "agent4": "\U0001f4bb Coder",
-        "agent9": "\U0001f4bb Claude Code",
+        "agent9": "\U0001f4bb Claudia",
+        "agent10": "\U0001f5a5 Claude Code",
     }
 
     def _build_agent_keyboard(self, current_agent_id: str) -> InlineKeyboardMarkup:
@@ -694,13 +695,20 @@ class TelegramBot:
             if agent:
                 self._user_agent[user_id] = agent_id
                 self._save_settings(user_id)
-                if agent_id == "agent9":
-                    # Claude Code agent — show session picker
+                if agent_id == "agent10":
+                    # Claude Code direct — show session picker
                     await query.edit_message_text(
-                        f"Switched to {agent.name} (Claude Code)"
+                        f"Switched to {agent.name} (Claude Code CLI)"
                     )
                     await self._show_cc_picker(
                         query.message.chat.id, str(user_id)
+                    )
+                elif agent_id == "agent9":
+                    # Claude Dev — show project list
+                    await query.edit_message_text(
+                        f"Switched to {agent.name}\n"
+                        f"Ketik pesan untuk mulai/lanjut project.\n"
+                        f"Project folder: /root/pawang/projects/"
                     )
                 else:
                     await query.edit_message_text(
@@ -1067,28 +1075,16 @@ class TelegramBot:
             await update.message.reply_text(f"Agent '{target_agent_id}' tidak ditemukan.")
             return
 
-        # Agent9 (Claude Code) — route via CLI, not API
+        # Agent9 (Claude Code) — route via CLI, smart project matching
         if target_agent_id == "agent9":
             from core.claude_code import get_cc_manager
             ccm = get_cc_manager()
-            # Use active session or most recent saved
-            active = ccm.get_active(user_id)
-            if active:
-                session = active.session
-            else:
-                saved = ccm.get_saved_sessions(user_id)
-                if saved:
-                    session = saved[0]
-                    ccm.set_active(user_id, session)
-                else:
-                    await update.message.reply_text(
-                        "Belum ada session Claude Code.\n"
-                        "Buat dulu: /cc new <nama> <folder>"
-                    )
-                    return
+            session = ccm.find_or_create_project(question, user_id)
+            is_new = not session.session_id
+            action = "New project" if is_new else "Resume"
             cc_buttons = self._cc_control_buttons()
             msg = await update.message.reply_text(
-                f"Asking {target_agent.name} ({session.directory})...",
+                f"{action}: {session.name}\n{session.directory}",
                 reply_markup=cc_buttons,
             )
             result = await ccm.execute(session, question, timeout=300)
@@ -1100,7 +1096,6 @@ class TelegramBot:
                     await update.message.chat.send_message(text[i:i+4000], reply_markup=markup)
             else:
                 await msg.edit_text(text, reply_markup=cc_buttons)
-            ccm.clear_active(user_id)
             return
 
         msg = await update.message.reply_text(f"Asking {target_agent.name}...")
@@ -1603,16 +1598,21 @@ class TelegramBot:
             return
         user_id = str(update.effective_user.id)
 
-        # Check CC mode first
+        # Check CC mode or agent9/10 first
         from core.claude_code import get_cc_manager
         ccm = get_cc_manager()
-        if ccm.is_in_cc_mode(user_id):
-            session = ccm.get_active(user_id).session
+        uid = update.effective_user.id
+        cur_agent = self._get_agent_id(uid)
+        if ccm.is_in_cc_mode(user_id) or cur_agent in ("agent9", "agent10"):
             ccm.clear_active(user_id)
+            if cur_agent in ("agent9", "agent10"):
+                self._user_agent[uid] = "agent1"
+                self._save_settings(uid)
+            agent = self.config.get_agent("agent1")
+            name = agent.name if agent else "Wulan"
             await update.message.reply_text(
-                f"Claude Code paused.\n"
-                f"Session: {session.name or session.directory}\n"
-                f"Ketik /cc untuk resume lagi."
+                f"Claude Code paused. Kembali ke {name}.\n"
+                f"Ketik /cc untuk resume."
             )
             return
 
@@ -2037,15 +2037,13 @@ class TelegramBot:
             await self._handle_cc_message(update, user_id, text)
             return
 
-        # Route agent9 (Claude) to Claude Code
+        # Route agent10 (Claude Code) to CC mode — like SSH
         uid = update.effective_user.id
         agent_id = self._get_agent_id(uid)
-        if agent_id == "agent9":
-            # Auto-enter CC mode if not already active
+        if agent_id == "agent10":
             if not ccm.is_in_cc_mode(user_id):
                 active = ccm.get_active(user_id)
                 if not active:
-                    # Pick most recent saved session or show picker
                     saved = ccm.get_saved_sessions(user_id)
                     if saved:
                         ccm.set_active(user_id, saved[0])
@@ -2055,8 +2053,53 @@ class TelegramBot:
             await self._handle_cc_message(update, user_id, text)
             return
 
+        # Route agent9 (Claude Dev) — smart project matching
+        if agent_id == "agent9":
+            session = ccm.find_or_create_project(text, user_id)
+            is_new = not session.session_id
+            action = "New project" if is_new else "Resume"
+            cc_buttons = self._cc_control_buttons()
+            sent = await update.message.reply_text(
+                f"{action}: {session.name}\n{session.directory}",
+                reply_markup=cc_buttons,
+            )
+            chunks = []
+            last_edit = [time.time()]
+
+            async def on_chunk(content: str):
+                chunks.append(content)
+                now = time.time()
+                if now - last_edit[0] >= 3.0:
+                    last_edit[0] = now
+                    preview = "\n".join(chunks)
+                    if len(preview) > 3800:
+                        preview = "...\n" + preview[-3700:]
+                    try:
+                        await sent.edit_text(preview[:4000], reply_markup=cc_buttons)
+                    except Exception:
+                        pass
+
+            result = await ccm.execute(session, text, on_chunk=on_chunk, timeout=300)
+            if len(result) > 4000:
+                try:
+                    await sent.edit_text(result[:4000], reply_markup=cc_buttons)
+                except Exception:
+                    pass
+                parts = [result[i:i+4000] for i in range(4000, len(result), 4000)]
+                for i, part in enumerate(parts):
+                    markup = cc_buttons if i == len(parts) - 1 else None
+                    await update.message.chat.send_message(part, reply_markup=markup)
+            else:
+                try:
+                    await sent.edit_text(
+                        result or "(no output)",
+                        reply_markup=cc_buttons,
+                    )
+                except Exception:
+                    pass
+            return
+
         # Check if user is in key-edit mode
-        uid = update.effective_user.id
         if uid in self._waiting_key:
             provider_name = self._waiting_key.pop(uid)
             new_key = update.message.text.strip()
@@ -2674,21 +2717,16 @@ class TelegramBot:
         user_id = str(uid)
         from core.claude_code import get_cc_manager
         ccm = get_cc_manager()
-        if ccm.is_in_cc_mode(user_id):
+        cur_agent = self._get_agent_id(uid)
+        in_cc = ccm.is_in_cc_mode(user_id) or cur_agent in ("agent9", "agent10")
+        if in_cc:
             ccm.clear_active(user_id)
-            # If on agent9, switch back to agent1
-            if self._get_agent_id(uid) == "agent9":
+            if cur_agent in ("agent9", "agent10"):
                 self._user_agent[uid] = "agent1"
                 self._save_settings(uid)
-                agent = self.config.get_agent("agent1")
-                name = agent.name if agent else "Wulan"
-                await update.message.reply_text(
-                    f"Claude Code closed. Kembali ke {name}."
-                )
-            else:
-                await update.message.reply_text(
-                    "Claude Code session closed. Kembali ke agent."
-                )
+            agent = self.config.get_agent("agent1")
+            name = agent.name if agent else "Wulan"
+            await update.message.reply_text(f"Claude Code closed. Kembali ke {name}.")
         else:
             await update.message.reply_text("Tidak dalam mode Claude Code.")
 
@@ -2931,37 +2969,41 @@ class TelegramBot:
             await self._show_cc_picker(query.message.chat.id, user_id)
 
         elif data == "cc:stop":
-            # Pause CC mode from inline button
-            if ccm.is_in_cc_mode(user_id):
-                session = ccm.get_active(user_id).session
-                ccm.clear_active(user_id)
+            # Pause — clear CC mode, stay on current agent
+            ccm.clear_active(user_id)
+            uid = int(user_id)
+            cur_agent = self._get_agent_id(uid)
+            if cur_agent in ("agent9", "agent10"):
+                # Switch back to agent1 on pause too
+                self._user_agent[uid] = "agent1"
+                self._save_settings(uid)
+                agent = self.config.get_agent("agent1")
+                name = agent.name if agent else "Wulan"
                 await query.edit_message_text(
                     f"{query.message.text}\n\n"
                     f"-- Paused --\n"
-                    f"Session: {session.name or session.directory}\n"
-                    f"Ketik /cc untuk resume."
+                    f"Kembali ke {name}. Ketik /cc untuk resume."
                 )
             else:
-                await query.answer("Tidak dalam mode Claude Code.")
+                await query.edit_message_text(
+                    f"{query.message.text}\n\n-- Paused --"
+                )
 
         elif data == "cc:exit":
-            # Exit CC mode from inline button + switch back from agent9
-            if ccm.is_in_cc_mode(user_id):
-                ccm.clear_active(user_id)
-                uid = int(user_id)
-                back_msg = "Kembali ke agent."
-                if self._get_agent_id(uid) == "agent9":
-                    self._user_agent[uid] = "agent1"
-                    self._save_settings(uid)
-                    agent = self.config.get_agent("agent1")
-                    back_msg = f"Kembali ke {agent.name if agent else 'Wulan'}."
-                await query.edit_message_text(
-                    f"{query.message.text}\n\n"
-                    f"-- Session closed --\n"
-                    f"{back_msg}"
-                )
-            else:
-                await query.answer("Tidak dalam mode Claude Code.")
+            # Exit — clear CC mode + switch back to agent1
+            ccm.clear_active(user_id)
+            uid = int(user_id)
+            cur_agent = self._get_agent_id(uid)
+            if cur_agent in ("agent9", "agent10"):
+                self._user_agent[uid] = "agent1"
+                self._save_settings(uid)
+            agent = self.config.get_agent("agent1")
+            name = agent.name if agent else "Wulan"
+            await query.edit_message_text(
+                f"{query.message.text}\n\n"
+                f"-- Session closed --\n"
+                f"Kembali ke {name}."
+            )
 
     def _cc_control_buttons(self) -> InlineKeyboardMarkup:
         """Inline keyboard with Stop/Exit for CC streaming output."""

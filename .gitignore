@@ -22,3 +22,6 @@ log-*.txt
 
 # Workspace files (agent-generated)
 workspace/
+
+# Agent9 project folders
+projects/

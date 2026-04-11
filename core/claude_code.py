@@ -8,6 +8,7 @@ streaming output.
 import asyncio
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,7 @@ from core.logger import log
 
 CLAUDE_BIN = "/root/.local/bin/claude"
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
+AGENT9_PROJECTS = Path("/root/pawang/projects")  # project folders for agent9
 
 
 @dataclass
@@ -219,6 +221,112 @@ class ClaudeCodeManager:
             (time.time(), session_db_id)
         )
         db.conn.commit()
+
+    # --- Project matching (agent9 delegation) ---
+
+    @staticmethod
+    def _extract_keywords(text: str) -> set[str]:
+        """Extract keywords from text, ignoring stop words."""
+        stop = {
+            "buat", "buatin", "bikin", "tolong", "coba", "project", "proyek",
+            "baru", "new", "lanjut", "lanjutin", "continue", "resume",
+            "yang", "di", "ke", "dari", "untuk", "dengan", "dan", "atau",
+            "ini", "itu", "nih", "dong", "ya", "mas", "mau", "saya",
+            "the", "a", "an", "is", "for", "to", "of", "in", "on",
+            "create", "make", "build", "please", "help",
+        }
+        words = set(re.findall(r'[a-zA-Z0-9]+', text.lower()))
+        return {w for w in words if w not in stop and len(w) >= 2}
+
+    def match_session(self, task: str, user_id: str = "") -> Optional[CCSession]:
+        """Find best matching session for a task description.
+
+        Compares task keywords against session name + description.
+        Returns session if confidence > 0.3, else None.
+        """
+        task_kw = self._extract_keywords(task)
+        if not task_kw:
+            return None
+
+        saved = self.get_saved_sessions(user_id)
+        best = None
+        best_score = 0.0
+
+        for s in saved:
+            session_text = f"{s.name} {s.description}"
+            session_kw = self._extract_keywords(session_text)
+            if not session_kw:
+                continue
+            # Jaccard similarity
+            overlap = len(task_kw & session_kw)
+            union = len(task_kw | session_kw)
+            score = overlap / union if union > 0 else 0
+            if score > best_score:
+                best_score = score
+                best = s
+
+        if best and best_score >= 0.3:
+            log.info(f"CC session match ({best_score:.2f}): '{task[:50]}' → {best.name}")
+            return best
+        return None
+
+    def find_or_create_project(self, task: str, user_id: str = "") -> CCSession:
+        """Find matching session or create new project folder + session.
+
+        1. Try matching existing session by keywords
+        2. If no match, extract project name from task, create folder, create session
+        """
+        # 1. Try match existing
+        matched = self.match_session(task, user_id)
+        if matched:
+            return matched
+
+        # 2. Extract project name from task
+        name = self._extract_project_name(task)
+        slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-') or "project"
+
+        # 3. Create folder
+        AGENT9_PROJECTS.mkdir(parents=True, exist_ok=True)
+        project_dir = AGENT9_PROJECTS / slug
+        # Avoid collision
+        if project_dir.exists():
+            i = 2
+            while (AGENT9_PROJECTS / f"{slug}-{i}").exists():
+                i += 1
+            project_dir = AGENT9_PROJECTS / f"{slug}-{i}"
+        project_dir.mkdir(parents=True, exist_ok=True)
+
+        # 4. Save session to DB
+        db_id = self.save_session(name, str(project_dir), "", user_id)
+        self.update_description(db_id, task[:200])
+
+        session = CCSession(
+            id=db_id, name=name, directory=str(project_dir),
+            session_id="", created_at=time.time(),
+            description=task[:200],
+        )
+        log.info(f"CC new project: '{name}' at {project_dir}")
+        return session
+
+    @staticmethod
+    def _extract_project_name(task: str) -> str:
+        """Try to extract a meaningful project name from task description."""
+        # Common patterns: "buat project X", "project X", "bikin X"
+        patterns = [
+            r'(?:project|proyek)\s+(?:tentang\s+)?(.+?)(?:\s*[,.]|$)',
+            r'(?:buat|buatin|bikin)\s+(?:project\s+)?(.+?)(?:\s*[,.]|$)',
+            r'(?:lanjut|lanjutin|resume|continue)\s+(?:project\s+)?(.+?)(?:\s*[,.]|$)',
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, task, re.IGNORECASE)
+            if m:
+                name = m.group(1).strip()
+                # Clean up — take first few meaningful words
+                words = name.split()[:4]
+                return " ".join(words)
+        # Fallback: first 3 meaningful words from task
+        kw = list(ClaudeCodeManager._extract_keywords(task))[:3]
+        return " ".join(kw) if kw else "untitled"
 
     # --- Active session management ---
 

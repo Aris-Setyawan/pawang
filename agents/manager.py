@@ -351,6 +351,32 @@ class AgentManager:
                 return chain[1]
         return None
 
+    async def _delegate_claude_code(self, user_id: str, task: str,
+                                     on_progress=None) -> str:
+        """Delegate task to Claude Code CLI (agent9).
+
+        Auto-matches task to existing project session, or creates new project.
+        """
+        from core.claude_code import get_cc_manager
+        ccm = get_cc_manager()
+
+        # Smart match: find existing project or create new one
+        session = ccm.find_or_create_project(task, user_id)
+
+        is_new = not session.session_id
+        if on_progress:
+            try:
+                action = "New project" if is_new else "Resume"
+                await on_progress(
+                    f"Claude Code: {action} '{session.name}'\n"
+                    f"{session.directory}"
+                )
+            except Exception:
+                pass
+
+        result = await ccm.execute(session, task, timeout=300)
+        return result
+
     async def delegate(self, from_agent_id: str, to_agent_id: str,
                        user_id: str, task: str,
                        chat_id: str = "",
@@ -374,6 +400,10 @@ class AgentManager:
         target_agent = self.config.get_agent(to_agent_id)
         if not target_agent:
             return f"[Error: Agent '{to_agent_id}' not found]", 0
+
+        # Agent9 (Claude Code) — route via CLI, not API
+        if to_agent_id == "agent9":
+            return await self._delegate_claude_code(user_id, task, on_progress), 1
 
         result_text, iters, status = await self._run_delegated_loop(
             from_agent_id, to_agent_id, target_agent, user_id, task,
