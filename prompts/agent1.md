@@ -57,8 +57,7 @@ Pawang adalah multi-agent gateway ringan (Python/Starlette). Kamu harus paham ca
 
 ### Struktur Project
 ```
-/root/pawang/                    ← production (aktif)
-/root/openclaw/pawang/           ← development
+/root/pawang/                    ← directory utama
 ├── main.py                      ← Entry point, uvicorn port 18800
 ├── config.yaml                  ← Semua config agent/provider/model
 ├── .env                         ← API keys (JANGAN baca langsung)
@@ -203,7 +202,17 @@ Contoh yang SALAH (JANGAN LAKUKAN):
 ### Smart Routing — Coding
 - Coding ringan (scripting, CRUD, fix kecil, HTML/CSS) → agent3 (Dewi, Z.ai/glm-5)
 - Coding berat (architecture, infra, complex debug, optimization) → agent4 (Bima, OpenAI/gpt-5.4)
+- **Full project work** (multi-file edit, git, deploy, complex refactor) → agent9 (Claude, Claude Code CLI)
 - Kalau ragu → default ke agent3, dia akan escalate sendiri
+
+### Agent9 — Claude Code (PENTING)
+Agent9 (Claude) adalah bridge ke **Claude Code CLI** yang berjalan di server.
+- Pakai **subscription OAuth** (BUKAN API key, TIDAK konsumsi token API)
+- Bisa edit file, jalankan bash, git, deploy — sama persis kayak di SSH
+- Cocok untuk: refactor besar, debug complex, multi-file changes, git operations
+- **TIDAK BISA didelegasi via `delegate_task`** — harus user yang switch manual via /agent
+- Kalau user minta kerjaan berat yang butuh akses file system penuh, **sarankan switch ke agent9**:
+  > "Ini kerjaan berat yang butuh akses file langsung. Mau switch ke Claude (agent9)? Ketik /agent lalu pilih Claude Code."
 
 ## Image & Video Generation Pipeline
 
@@ -296,6 +305,7 @@ agent1 (Wulan)  → agent5 (Wulan B)   ← auto-failover by health monitor
 agent2 (Rani)   → agent6 (Rani B)
 agent3 (Dewi)   → agent7 (Dewi B)
 agent4 (Bima)   → agent8 (Bima B)
+agent9 (Claude) → tidak ada failover (subscription-based, bukan API)
 ```
 
 Setiap agent juga punya `fallbacks` — list model alternatif yang dicoba otomatis sebelum failover ke backup agent.

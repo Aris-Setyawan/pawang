@@ -457,6 +457,9 @@ body {
     <div class="nav-item" data-tab="gworkspace">
       <span class="icon">&#9993;</span> Google Workspace
     </div>
+    <div class="nav-item" data-tab="claude">
+      <span class="icon">&#128187;</span> Claude Code
+    </div>
     <div class="nav-item" data-tab="tokenguard">
       <span class="icon">&#128737;</span> Token Guard
     </div>
@@ -862,6 +865,32 @@ body {
       </div>
     </section>
 
+    <!-- CLAUDE CODE -->
+    <section class="section" id="tab-claude">
+      <div class="section-title">Claude Code — Subscription Auth</div>
+
+      <div class="card">
+        <div class="card-title">Auth Status</div>
+        <div id="claude-status" style="margin-top:12px;font-family:var(--mono);font-size:12px;color:var(--text-dim)">Loading...</div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Info</div>
+        <div style="margin-top:12px;font-size:12px;color:var(--text-dim);line-height:1.8">
+          <p>Claude Code dijalankan dari Telegram via <code>/cc</code> command.</p>
+          <p>Session menggunakan <strong>subscription auth</strong> (bukan API key).</p>
+          <p style="margin-top:8px"><strong>Login via SSH:</strong></p>
+          <pre style="background:var(--surface);padding:10px;border-radius:6px;margin-top:4px;color:var(--accent);font-size:11px">claude login</pre>
+          <p style="margin-top:8px;color:var(--text-dim)">Setelah login, semua session dari <code>/cc</code> akan pakai subscription — bukan API key.</p>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="loadClaudeStatus()">Refresh</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="claudeLogout()">Logout</button>
+      </div>
+    </section>
+
     <!-- TOKEN GUARD -->
     <section class="section" id="tab-tokenguard">
       <div class="section-title">Token Guard — Spike Detection & Budget Monitor</div>
@@ -1085,6 +1114,7 @@ document.querySelectorAll('.nav-item').forEach(el => {
     if (el.dataset.tab === 'sessions') loadSessions();
     if (el.dataset.tab === 'intents') loadIntentCache();
     if (el.dataset.tab === 'gworkspace') loadGogStatus();
+    if (el.dataset.tab === 'claude') loadClaudeStatus();
   });
 });
 
@@ -1930,6 +1960,54 @@ async function gogRemove(email) {
     if (d.ok) {
       showToast('Account removed', 'ok');
       loadGogStatus();
+    } else {
+      showToast('Error: ' + (d.error||'unknown'), 'err');
+    }
+  } catch(e) { showToast('Failed', 'err'); }
+}
+
+// --- Claude Code ---
+async function loadClaudeStatus() {
+  const el = document.getElementById('claude-status');
+  try {
+    const r = await apiFetch('/panel/api/claude/status');
+    const d = await r.json();
+    if (d.loggedIn) {
+      const sub = d.subscriptionType ? ` (${d.subscriptionType})` : '';
+      const email = d.email || 'unknown';
+      const org = d.orgName || '-';
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="color:var(--ok);font-size:16px">&#9679;</span>
+          <strong style="color:var(--ok)">Logged In${sub}</strong>
+        </div>
+        <table style="font-size:12px;line-height:2">
+          <tr><td style="color:var(--text-dim);padding-right:16px">Email</td><td>${email}</td></tr>
+          <tr><td style="color:var(--text-dim);padding-right:16px">Org</td><td>${org}</td></tr>
+          <tr><td style="color:var(--text-dim);padding-right:16px">Auth</td><td>${d.authMethod || '-'}</td></tr>
+          <tr><td style="color:var(--text-dim);padding-right:16px">Provider</td><td>${d.apiProvider || '-'}</td></tr>
+        </table>`;
+    } else {
+      const err = d.error || 'Not logged in';
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="color:var(--danger);font-size:16px">&#9679;</span>
+          <strong style="color:var(--danger)">Not Logged In</strong>
+        </div>
+        <div style="margin-top:8px;color:var(--text-dim)">${err}</div>
+        <div style="margin-top:8px;color:var(--warn)">Run <code>claude login</code> via SSH to authenticate.</div>`;
+    }
+  } catch(e) { el.textContent = 'Error loading status'; }
+}
+
+async function claudeLogout() {
+  if (!confirm('Logout dari Claude Code? Session /cc tidak akan bisa berjalan sampai login ulang.')) return;
+  try {
+    const r = await apiFetch('/panel/api/claude/logout', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      showToast('Logged out from Claude Code', 'ok');
+      loadClaudeStatus();
     } else {
       showToast('Error: ' + (d.error||'unknown'), 'err');
     }

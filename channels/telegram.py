@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+import os
 import time
 from typing import Optional
 
@@ -363,6 +364,7 @@ class TelegramBot:
         # Background delegation tracking — multiple concurrent delegations per user
         self._bg_delegations: dict[str, dict[str, dict]] = {}  # user_id -> {agent_id -> {task info}}
         self._monitoring: dict[str, str] = {}  # user_id -> agent_id being watched (or "" = none)
+        self._cc_pending_edits: dict[str, int] = {}  # "_cc_edit_name_uid" / "_cc_edit_desc_uid" -> session db_id
         self._restore_settings()
 
     def _restore_settings(self):
@@ -528,6 +530,7 @@ class TelegramBot:
         "agent2": "\U0001f3a8 Creative",
         "agent3": "\U0001f4ca Analyst",
         "agent4": "\U0001f4bb Coder",
+        "agent9": "\U0001f4bb Claude Code",
     }
 
     def _build_agent_keyboard(self, current_agent_id: str) -> InlineKeyboardMarkup:
@@ -691,9 +694,18 @@ class TelegramBot:
             if agent:
                 self._user_agent[user_id] = agent_id
                 self._save_settings(user_id)
-                await query.edit_message_text(
-                    f"Switched to agent {agent.name} ({agent.id})"
-                )
+                if agent_id == "agent9":
+                    # Claude Code agent — show session picker
+                    await query.edit_message_text(
+                        f"Switched to {agent.name} (Claude Code)"
+                    )
+                    await self._show_cc_picker(
+                        query.message.chat.id, str(user_id)
+                    )
+                else:
+                    await query.edit_message_text(
+                        f"Switched to agent {agent.name} ({agent.id})"
+                    )
 
         # --- Settings callbacks ---
         elif data == "set:think":
@@ -820,6 +832,9 @@ class TelegramBot:
                 await query.edit_message_text(f"Denied: {approval_id}")
             else:
                 await query.edit_message_text("Approval expired or already handled.")
+
+        elif data.startswith("cc:"):
+            await self._handle_cc_callback(query, str(user_id), data)
 
     # --- Commands ---
 
@@ -1050,6 +1065,42 @@ class TelegramBot:
         target_agent = self.config.get_agent(target_agent_id)
         if not target_agent:
             await update.message.reply_text(f"Agent '{target_agent_id}' tidak ditemukan.")
+            return
+
+        # Agent9 (Claude Code) — route via CLI, not API
+        if target_agent_id == "agent9":
+            from core.claude_code import get_cc_manager
+            ccm = get_cc_manager()
+            # Use active session or most recent saved
+            active = ccm.get_active(user_id)
+            if active:
+                session = active.session
+            else:
+                saved = ccm.get_saved_sessions(user_id)
+                if saved:
+                    session = saved[0]
+                    ccm.set_active(user_id, session)
+                else:
+                    await update.message.reply_text(
+                        "Belum ada session Claude Code.\n"
+                        "Buat dulu: /cc new <nama> <folder>"
+                    )
+                    return
+            cc_buttons = self._cc_control_buttons()
+            msg = await update.message.reply_text(
+                f"Asking {target_agent.name} ({session.directory})...",
+                reply_markup=cc_buttons,
+            )
+            result = await ccm.execute(session, question, timeout=300)
+            text = f"{target_agent.name}:\n\n{result}"
+            if len(text) > 4000:
+                await msg.edit_text(text[:4000], reply_markup=cc_buttons)
+                for i in range(4000, len(text), 4000):
+                    markup = cc_buttons if i + 4000 >= len(text) else None
+                    await update.message.chat.send_message(text[i:i+4000], reply_markup=markup)
+            else:
+                await msg.edit_text(text, reply_markup=cc_buttons)
+            ccm.clear_active(user_id)
             return
 
         msg = await update.message.reply_text(f"Asking {target_agent.name}...")
@@ -1547,10 +1598,24 @@ class TelegramBot:
         db.record_usage("vision", "auto", agent_id, user_id, 0, len(result or "") // 4, 0)
 
     async def _cmd_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Stop running task AND/OR background delegation."""
+        """Stop running task AND/OR background delegation, or exit CC mode."""
         if not self._is_allowed(update.effective_user.id):
             return
         user_id = str(update.effective_user.id)
+
+        # Check CC mode first
+        from core.claude_code import get_cc_manager
+        ccm = get_cc_manager()
+        if ccm.is_in_cc_mode(user_id):
+            session = ccm.get_active(user_id).session
+            ccm.clear_active(user_id)
+            await update.message.reply_text(
+                f"Claude Code paused.\n"
+                f"Session: {session.name or session.directory}\n"
+                f"Ketik /cc untuk resume lagi."
+            )
+            return
+
         stopped = []
 
         # Stop foreground task
@@ -1568,7 +1633,7 @@ class TelegramBot:
 
         if stopped:
             await update.message.reply_text(
-                f"⚡ Stop requested: {', '.join(stopped)}"
+                f"Stop requested: {', '.join(stopped)}"
             )
         else:
             await update.message.reply_text("Tidak ada task yang sedang berjalan.")
@@ -1939,6 +2004,55 @@ class TelegramBot:
         if not update.message or not update.message.text:
             return
         if not self._is_allowed(update.effective_user.id):
+            return
+
+        # Check if user is in Claude Code mode
+        user_id = str(update.effective_user.id)
+        text = update.message.text.strip()
+
+        # Handle pending CC session edits (name/description)
+        name_key = f"_cc_edit_name_{user_id}"
+        desc_key = f"_cc_edit_desc_{user_id}"
+        if name_key in self._cc_pending_edits:
+            db_id = self._cc_pending_edits.pop(name_key)
+            from core.claude_code import get_cc_manager
+            ccm = get_cc_manager()
+            ccm.rename_session(db_id, text)
+            await update.message.reply_text(f"Nama diubah: {text}")
+            await self._show_cc_picker(update.message.chat.id, user_id)
+            return
+        if desc_key in self._cc_pending_edits:
+            db_id = self._cc_pending_edits.pop(desc_key)
+            from core.claude_code import get_cc_manager
+            ccm = get_cc_manager()
+            ccm.update_description(db_id, text)
+            await update.message.reply_text(f"Deskripsi diubah: {text}")
+            await self._show_cc_picker(update.message.chat.id, user_id)
+            return
+
+        # Route to Claude Code if in CC mode
+        from core.claude_code import get_cc_manager
+        ccm = get_cc_manager()
+        if ccm.is_in_cc_mode(user_id):
+            await self._handle_cc_message(update, user_id, text)
+            return
+
+        # Route agent9 (Claude) to Claude Code
+        uid = update.effective_user.id
+        agent_id = self._get_agent_id(uid)
+        if agent_id == "agent9":
+            # Auto-enter CC mode if not already active
+            if not ccm.is_in_cc_mode(user_id):
+                active = ccm.get_active(user_id)
+                if not active:
+                    # Pick most recent saved session or show picker
+                    saved = ccm.get_saved_sessions(user_id)
+                    if saved:
+                        ccm.set_active(user_id, saved[0])
+                    else:
+                        await self._show_cc_picker(update.message.chat.id, user_id)
+                        return
+            await self._handle_cc_message(update, user_id, text)
             return
 
         # Check if user is in key-edit mode
@@ -2550,6 +2664,386 @@ class TelegramBot:
                         pass
             self._task_messages.pop(user_id, None)
 
+    # --- Claude Code Integration ---
+
+    async def _cmd_exit_cc(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /exit — leave Claude Code mode and switch back to agent1."""
+        if not self._is_allowed(update.effective_user.id):
+            return
+        uid = update.effective_user.id
+        user_id = str(uid)
+        from core.claude_code import get_cc_manager
+        ccm = get_cc_manager()
+        if ccm.is_in_cc_mode(user_id):
+            ccm.clear_active(user_id)
+            # If on agent9, switch back to agent1
+            if self._get_agent_id(uid) == "agent9":
+                self._user_agent[uid] = "agent1"
+                self._save_settings(uid)
+                agent = self.config.get_agent("agent1")
+                name = agent.name if agent else "Wulan"
+                await update.message.reply_text(
+                    f"Claude Code closed. Kembali ke {name}."
+                )
+            else:
+                await update.message.reply_text(
+                    "Claude Code session closed. Kembali ke agent."
+                )
+        else:
+            await update.message.reply_text("Tidak dalam mode Claude Code.")
+
+    async def _cmd_cc(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /cc command — show Claude Code session picker."""
+        if not self._is_allowed(update.effective_user.id):
+            return
+        user_id = str(update.effective_user.id)
+        args = update.message.text.split(maxsplit=2)
+
+        # /cc new <name> <directory>
+        if len(args) >= 2 and args[1].lower() == "new":
+            parts = " ".join(args[2:]).split() if len(args) > 2 else []
+            if len(parts) < 2:
+                await update.message.reply_text(
+                    "Usage: /cc new <nama> <folder>\n"
+                    "Contoh: /cc new pawang /root/pawang"
+                )
+                return
+            name = parts[0]
+            directory = parts[1]
+            if not os.path.isdir(directory):
+                await update.message.reply_text(f"Folder tidak ditemukan: {directory}")
+                return
+            from core.claude_code import get_cc_manager
+            ccm = get_cc_manager()
+            sid = ccm.save_session(name, directory, "", user_id)
+            await update.message.reply_text(f"Session '{name}' created. Ketik /cc untuk mulai.")
+            return
+
+        # /cc rename <id> <new_name>
+        if len(args) >= 3 and args[1].lower() == "rename":
+            try:
+                sid = int(args[2].split()[0])
+                new_name = " ".join(args[2].split()[1:])
+                from core.claude_code import get_cc_manager
+                get_cc_manager().rename_session(sid, new_name)
+                await update.message.reply_text(f"Renamed session #{sid} to '{new_name}'")
+            except (ValueError, IndexError):
+                await update.message.reply_text("Usage: /cc rename <id> <new_name>")
+            return
+
+        # Default: show session picker
+        await self._show_cc_picker(update.message.chat.id, user_id)
+
+    async def _show_cc_picker(self, chat_id, user_id: str, message_id=None):
+        """Show inline keyboard with Claude Code sessions."""
+        from core.claude_code import get_cc_manager
+
+        ccm = get_cc_manager()
+        saved = ccm.get_saved_sessions(user_id)
+
+        # Also scan filesystem for unsaved sessions
+        scanned = ccm.scan_sessions()
+        saved_sids = {s.session_id for s in saved}
+
+        buttons = []
+
+        # Saved sessions — 2 per row for grid layout
+        row = []
+        for s in saved[:8]:
+            label = s.name if s.name else os.path.basename(s.directory)
+            desc = s.description[:20] if s.description else s.directory.replace("/root/", "~/")
+            row.append(InlineKeyboardButton(
+                f"{label}\n{desc}",
+                callback_data=f"cc:detail:{s.id}",
+            ))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+
+        # Unsaved sessions from filesystem — auto-save to DB for short callback_data
+        row = []
+        for s in scanned:
+            if s.session_id in saved_sids:
+                continue
+            name = os.path.basename(s.directory) or s.directory
+            db_id = ccm.save_session(name, s.directory, s.session_id, user_id)
+            sublabel = s.directory.replace("/root/", "~/")
+            row.append(InlineKeyboardButton(
+                f"{sublabel}\n{s.session_id[:8]}...",
+                callback_data=f"cc:detail:{db_id}",
+            ))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+
+        # New session button
+        buttons.append([InlineKeyboardButton(
+            "+ New Session",
+            callback_data="cc:new_prompt",
+        )])
+
+        text = "Claude Code Sessions"
+        if not saved and not unsaved_count:
+            text += "\n\nBelum ada session. Tap '+ New Session' atau:\n/cc new <nama> <folder>"
+
+        markup = InlineKeyboardMarkup(buttons)
+        if message_id:
+            try:
+                await self.app.bot.edit_message_text(
+                    text, chat_id=chat_id, message_id=message_id,
+                    reply_markup=markup,
+                )
+                return
+            except Exception:
+                pass
+        await self.app.bot.send_message(chat_id, text, reply_markup=markup)
+
+    async def _show_cc_detail(self, query, session_id: int):
+        """Show session detail card with action buttons."""
+        from core.claude_code import get_cc_manager
+        ccm = get_cc_manager()
+        s = ccm.get_session_by_id(session_id)
+        if not s:
+            await query.edit_message_text("Session not found.")
+            return
+
+        name = s.name or os.path.basename(s.directory)
+        desc = s.description or "(no description)"
+        sid_short = s.session_id[:12] + "..." if s.session_id else "(new)"
+        folder = s.directory
+
+        import datetime
+        created = datetime.datetime.fromtimestamp(s.created_at).strftime("%Y-%m-%d %H:%M")
+        last = datetime.datetime.fromtimestamp(s.last_used).strftime("%Y-%m-%d %H:%M") if s.last_used else "-"
+
+        text = (
+            f"Session: {name}\n"
+            f"Deskripsi: {desc}\n"
+            f"Folder: {folder}\n"
+            f"Session ID: {sid_short}\n"
+            f"Created: {created}\n"
+            f"Last used: {last}"
+        )
+
+        buttons = [
+            [
+                InlineKeyboardButton("Resume", callback_data=f"cc:resume:{s.id}"),
+                InlineKeyboardButton("Kembali", callback_data="cc:back"),
+            ],
+            [
+                InlineKeyboardButton("Edit Nama", callback_data=f"cc:edit_name:{s.id}"),
+                InlineKeyboardButton("Edit Deskripsi", callback_data=f"cc:edit_desc:{s.id}"),
+            ],
+            [
+                InlineKeyboardButton("Delete", callback_data=f"cc:delete:{s.id}"),
+            ],
+        ]
+
+        await query.edit_message_text(
+            text, reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    async def _handle_cc_callback(self, query, user_id: str, data: str):
+        """Handle Claude Code inline keyboard callbacks."""
+        from core.claude_code import get_cc_manager, CCSession
+        ccm = get_cc_manager()
+
+        if data.startswith("cc:detail:"):
+            # Show session detail card
+            db_id = int(data.split(":")[2])
+            await self._show_cc_detail(query, db_id)
+
+        elif data == "cc:back":
+            # Back to session picker
+            await self._show_cc_picker(
+                query.message.chat.id, user_id,
+                message_id=query.message.message_id,
+            )
+
+        elif data.startswith("cc:resume:"):
+            # Resume saved session
+            db_id = int(data.split(":")[2])
+            session = ccm.get_session_by_id(db_id)
+            if not session:
+                await query.edit_message_text("Session not found.")
+                return
+            ccm.set_active(user_id, session)
+            name = session.name or os.path.basename(session.directory)
+            desc = f"\n{session.description}" if session.description else ""
+            await query.edit_message_text(
+                f"Claude Code: {name}{desc}\n"
+                f"{session.directory}\n\n"
+                f"Ketik pesan untuk Claude Code.\n"
+                f"/stop = pause, /exit = keluar"
+            )
+
+        elif data.startswith("cc:scan:"):
+            # Unsaved session — save first, then show detail
+            parts = data.split(":", 3)
+            sid = parts[2]
+            directory = parts[3] if len(parts) > 3 else "/"
+            name = os.path.basename(directory)
+            db_id = ccm.save_session(name, directory, sid, user_id)
+            await self._show_cc_detail(query, db_id)
+
+        elif data == "cc:new_prompt":
+            await query.edit_message_text(
+                "Buat session baru:\n"
+                "/cc new <nama> <folder>\n\n"
+                "Contoh:\n"
+                "/cc new pawang /root/pawang\n"
+                "/cc new webportal /root/webportal"
+            )
+
+        elif data.startswith("cc:edit_name:"):
+            db_id = int(data.split(":")[2])
+            # Store pending edit state
+            context_key = f"_cc_edit_name_{user_id}"
+            self._cc_pending_edits[context_key] = db_id
+            s = ccm.get_session_by_id(db_id)
+            current = s.name if s else ""
+            await query.edit_message_text(
+                f"Nama sekarang: {current}\n\n"
+                f"Ketik nama baru untuk session ini:\n"
+                f"(atau /cc untuk batal)"
+            )
+
+        elif data.startswith("cc:edit_desc:"):
+            db_id = int(data.split(":")[2])
+            context_key = f"_cc_edit_desc_{user_id}"
+            self._cc_pending_edits[context_key] = db_id
+            s = ccm.get_session_by_id(db_id)
+            current = s.description if s else ""
+            await query.edit_message_text(
+                f"Deskripsi sekarang: {current or '(kosong)'}\n\n"
+                f"Ketik deskripsi baru:\n"
+                f"(atau /cc untuk batal)"
+            )
+
+        elif data.startswith("cc:delete:"):
+            db_id = int(data.split(":")[2])
+            ccm.delete_session(db_id)
+            await query.edit_message_text("Session deleted.")
+            await self._show_cc_picker(query.message.chat.id, user_id)
+
+        elif data == "cc:stop":
+            # Pause CC mode from inline button
+            if ccm.is_in_cc_mode(user_id):
+                session = ccm.get_active(user_id).session
+                ccm.clear_active(user_id)
+                await query.edit_message_text(
+                    f"{query.message.text}\n\n"
+                    f"-- Paused --\n"
+                    f"Session: {session.name or session.directory}\n"
+                    f"Ketik /cc untuk resume."
+                )
+            else:
+                await query.answer("Tidak dalam mode Claude Code.")
+
+        elif data == "cc:exit":
+            # Exit CC mode from inline button + switch back from agent9
+            if ccm.is_in_cc_mode(user_id):
+                ccm.clear_active(user_id)
+                uid = int(user_id)
+                back_msg = "Kembali ke agent."
+                if self._get_agent_id(uid) == "agent9":
+                    self._user_agent[uid] = "agent1"
+                    self._save_settings(uid)
+                    agent = self.config.get_agent("agent1")
+                    back_msg = f"Kembali ke {agent.name if agent else 'Wulan'}."
+                await query.edit_message_text(
+                    f"{query.message.text}\n\n"
+                    f"-- Session closed --\n"
+                    f"{back_msg}"
+                )
+            else:
+                await query.answer("Tidak dalam mode Claude Code.")
+
+    def _cc_control_buttons(self) -> InlineKeyboardMarkup:
+        """Inline keyboard with Stop/Exit for CC streaming output."""
+        return InlineKeyboardMarkup([[
+            InlineKeyboardButton("Pause", callback_data="cc:stop"),
+            InlineKeyboardButton("Exit", callback_data="cc:exit"),
+        ]])
+
+    async def _handle_cc_message(self, update: Update, user_id: str, text: str):
+        """Handle a message while in Claude Code mode."""
+        from core.claude_code import get_cc_manager
+        ccm = get_cc_manager()
+        active = ccm.get_active(user_id)
+        if not active:
+            return
+
+        session = active.session
+        await update.message.chat.send_action(ChatAction.TYPING)
+
+        # Send initial "processing" message with control buttons
+        cc_buttons = self._cc_control_buttons()
+        sent = await update.message.reply_text(
+            "Claude Code processing...",
+            reply_markup=cc_buttons,
+        )
+
+        # Collect chunks for periodic updates
+        chunks = []
+        last_edit = [time.time()]
+
+        async def on_chunk(content: str):
+            chunks.append(content)
+            now = time.time()
+            # Edit message every 3 seconds
+            if now - last_edit[0] >= 3.0:
+                last_edit[0] = now
+                preview = "\n".join(chunks)
+                if len(preview) > 3800:
+                    preview = "...\n" + preview[-3700:]
+                try:
+                    await sent.edit_text(
+                        preview[:4000],
+                        reply_markup=cc_buttons,
+                    )
+                except Exception:
+                    pass
+
+        # Execute
+        result = await ccm.execute(session, text, on_chunk=on_chunk, timeout=300)
+
+        # Final update with control buttons attached
+        if len(result) > 4000:
+            # Split: first chunk without buttons, last chunk with buttons
+            try:
+                await sent.edit_text(result[:4000])
+            except Exception:
+                pass
+            parts = [result[i:i+4000] for i in range(4000, len(result), 4000)]
+            for i, part in enumerate(parts):
+                markup = cc_buttons if i == len(parts) - 1 else None
+                await update.message.chat.send_message(part, reply_markup=markup)
+        else:
+            try:
+                await sent.edit_text(
+                    result or "(no output — check /cc session or try again)",
+                    reply_markup=cc_buttons,
+                )
+            except Exception:
+                await update.message.reply_text(
+                    result or "(no output)",
+                    reply_markup=cc_buttons,
+                )
+
+        # Save session_id if new
+        if not session.session_id:
+            import re
+            match = re.search(r'session: ([a-f0-9-]+)', result)
+            if match:
+                session.session_id = match.group(1)
+                ccm.save_session(session.name, session.directory,
+                                 session.session_id, user_id)
+
     async def _run_task(self, update: Update, user_id: str, resume_from=None):
         """Run a task with streaming, cancellation support."""
         # Rate limit check
@@ -2958,6 +3452,8 @@ class TelegramBot:
         self.app.add_handler(CommandHandler("stop", self._cmd_stop))
         self.app.add_handler(CommandHandler("watch", self._cmd_watch))
         self.app.add_handler(CommandHandler("mute", self._cmd_mute))
+        self.app.add_handler(CommandHandler("exit", self._cmd_exit_cc))
+        self.app.add_handler(CommandHandler("cc", self._cmd_cc))
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
         self.app.add_handler(
             MessageHandler(filters.PHOTO, self._handle_photo)
@@ -2996,6 +3492,7 @@ class TelegramBot:
             BotCommand("stop", "Hentikan task/delegasi yang berjalan"),
             BotCommand("watch", "Lihat live progress delegasi"),
             BotCommand("mute", "Stop monitoring, agent tetap kerja"),
+            BotCommand("cc", "Claude Code — manage sessions"),
         ])
 
         log.info("Telegram bot configured")

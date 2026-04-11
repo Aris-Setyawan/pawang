@@ -231,6 +231,16 @@ agents:
     max_context_tokens: 128000
     temperature: 0.5
 
+  - id: agent9
+    name: Claude
+    model: claude-opus-4-20250514
+    provider: anthropic
+    system_prompt_file: prompts/agent9.md
+    channels: []
+    max_context_tokens: 200000
+    temperature: 0.5
+    # Routes through Claude Code CLI (subscription), not API key
+
 channels:
   telegram:
     token: ${TELEGRAM_BOT_TOKEN}

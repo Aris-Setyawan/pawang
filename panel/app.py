@@ -833,6 +833,7 @@ async def panel_intent_cache(request: Request):
 # --- Google Workspace (gog CLI) ---
 
 GOG_BIN = "/usr/local/bin/gog"
+CLAUDE_BIN = "/root/.local/bin/claude"
 
 
 @require_auth
@@ -973,6 +974,47 @@ async def panel_gog_auth_remove(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# --- Claude Code Auth ---
+
+@require_auth
+async def panel_claude_status(request: Request):
+    """GET — check Claude Code subscription status."""
+    import asyncio
+    import json as _json
+    try:
+        # Strip ANTHROPIC_API_KEY to see real subscription status
+        env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "auth", "status", "--json",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        data = _json.loads(stdout.decode())
+        return JSONResponse(data)
+    except FileNotFoundError:
+        return JSONResponse({"loggedIn": False, "error": "Claude Code CLI not installed"})
+    except Exception as e:
+        return JSONResponse({"loggedIn": False, "error": str(e)})
+
+
+@require_auth
+async def panel_claude_logout(request: Request):
+    """POST — logout from Claude Code."""
+    import asyncio
+    try:
+        env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "auth", "logout",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=10)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # --- Routes ---
 
 panel_routes = [
@@ -998,4 +1040,6 @@ panel_routes = [
     Route("/panel/api/gog/auth-start", panel_gog_auth_start, methods=["POST"]),
     Route("/panel/api/gog/auth-complete", panel_gog_auth_complete, methods=["POST"]),
     Route("/panel/api/gog/auth-remove", panel_gog_auth_remove, methods=["POST"]),
+    Route("/panel/api/claude/status", panel_claude_status),
+    Route("/panel/api/claude/logout", panel_claude_logout, methods=["POST"]),
 ]
