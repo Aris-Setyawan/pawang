@@ -445,6 +445,18 @@ body {
     <div class="nav-item" data-tab="usage">
       <span class="icon">&#9635;</span> Usage Stats
     </div>
+    <div class="nav-item" data-tab="system">
+      <span class="icon">&#9618;</span> System Monitor
+    </div>
+    <div class="nav-item" data-tab="sessions">
+      <span class="icon">&#8644;</span> Sessions
+    </div>
+    <div class="nav-item" data-tab="intents">
+      <span class="icon">&#10035;</span> Intent Cache
+    </div>
+    <div class="nav-item" data-tab="gworkspace">
+      <span class="icon">&#9993;</span> Google Workspace
+    </div>
     <div class="nav-item" data-tab="tokenguard">
       <span class="icon">&#128737;</span> Token Guard
     </div>
@@ -677,6 +689,179 @@ body {
       </div>
     </section>
 
+    <!-- SYSTEM MONITOR -->
+    <section class="section" id="tab-system">
+      <div class="section-title">System Resources</div>
+
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="summary-label">CPU USAGE</div>
+          <div class="summary-value" id="sys-cpu" style="color:var(--accent)">--</div>
+          <div style="margin-top:8px;height:8px;background:var(--surface);border-radius:4px;overflow:hidden">
+            <div id="sys-cpu-bar" style="height:100%;background:var(--accent);width:0%;transition:width .5s"></div>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">MEMORY</div>
+          <div class="summary-value" id="sys-mem" style="color:var(--accent2)">--</div>
+          <div style="margin-top:8px;height:8px;background:var(--surface);border-radius:4px;overflow:hidden">
+            <div id="sys-mem-bar" style="height:100%;background:var(--accent2);width:0%;transition:width .5s"></div>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">DISK</div>
+          <div class="summary-value" id="sys-disk" style="color:var(--warn)">--</div>
+          <div style="margin-top:8px;height:8px;background:var(--surface);border-radius:4px;overflow:hidden">
+            <div id="sys-disk-bar" style="height:100%;background:var(--warn);width:0%;transition:width .5s"></div>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">PAWANG RSS</div>
+          <div class="summary-value" id="sys-pawang" style="color:var(--success)">--</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Details</div>
+        <div style="overflow-x:auto;margin-top:12px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)">
+            <tbody id="sys-detail-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <button class="btn btn-ghost btn-sm" onclick="loadSystem()">Refresh</button>
+      </div>
+    </section>
+
+    <!-- SESSIONS -->
+    <section class="section" id="tab-sessions">
+      <div class="section-title">Active Sessions</div>
+
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="summary-label">ACTIVE SESSIONS</div>
+          <div class="summary-value" id="sess-count" style="color:var(--accent)">--</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Session List</div>
+        <div style="overflow-x:auto;margin-top:12px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)">
+            <thead>
+              <tr style="color:var(--text-dim);border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:8px 6px">Agent</th>
+                <th style="text-align:left;padding:8px 6px">User</th>
+                <th style="text-align:left;padding:8px 6px">Model</th>
+                <th style="text-align:right;padding:8px 6px">Messages</th>
+              </tr>
+            </thead>
+            <tbody id="sess-tbody">
+              <tr><td colspan="4" style="color:var(--text-dim);padding:16px;text-align:center">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <button class="btn btn-ghost btn-sm" onclick="loadSessions()">Refresh</button>
+      </div>
+    </section>
+
+    <!-- INTENT CACHE -->
+    <section class="section" id="tab-intents">
+      <div class="section-title">Intent Cache — Self-Learning Tool Patterns</div>
+
+      <div class="summary-grid">
+        <div class="summary-card">
+          <div class="summary-label">PATTERNS</div>
+          <div class="summary-value" id="ic-patterns" style="color:var(--accent)">--</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">TOTAL HITS</div>
+          <div class="summary-value" id="ic-hits" style="color:var(--accent2)">--</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">SUCCESSES</div>
+          <div class="summary-value" id="ic-successes" style="color:var(--success)">--</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">API CALLS SAVED</div>
+          <div class="summary-value" id="ic-saved" style="color:var(--warn)">--</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Learned Patterns</div>
+        <div style="overflow-x:auto;margin-top:12px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)">
+            <thead>
+              <tr style="color:var(--text-dim);border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:8px 6px">Tool</th>
+                <th style="text-align:left;padding:8px 6px">Example Query</th>
+                <th style="text-align:right;padding:8px 6px">Hits</th>
+                <th style="text-align:right;padding:8px 6px">OK</th>
+                <th style="text-align:right;padding:8px 6px">Fail</th>
+                <th style="text-align:right;padding:8px 6px">Reliability</th>
+              </tr>
+            </thead>
+            <tbody id="ic-tbody">
+              <tr><td colspan="6" style="color:var(--text-dim);padding:16px;text-align:center">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <button class="btn btn-ghost btn-sm" onclick="loadIntentCache()">Refresh</button>
+      </div>
+    </section>
+
+    <!-- GOOGLE WORKSPACE -->
+    <section class="section" id="tab-gworkspace">
+      <div class="section-title">Google Workspace — gog CLI Integration</div>
+
+      <div class="card">
+        <div class="card-title">Connected Accounts</div>
+        <div id="gog-accounts" style="margin-top:12px;font-family:var(--mono);font-size:12px;color:var(--text-dim)">Loading...</div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">Add Google Account</div>
+        <div style="margin-top:12px;font-size:12px;color:var(--text-dim);line-height:1.6">
+          <strong>Permissions:</strong> Gmail (read-only), Calendar (read+write), Sheets (read+write)
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="email" id="gog-email" placeholder="email@gmail.com"
+            style="font-family:var(--mono);font-size:12px;background:var(--surface);color:var(--text);border:1px solid var(--border);padding:8px 12px;border-radius:6px;width:280px">
+          <button class="btn btn-ghost btn-sm" onclick="gogAuthStart()">Connect</button>
+        </div>
+        <div id="gog-auth-flow" style="display:none;margin-top:16px">
+          <div style="font-size:12px;color:var(--warn);margin-bottom:8px">
+            Step 1: Buka link di bawah, login Google, approve access:
+          </div>
+          <div style="background:var(--surface);padding:10px;border-radius:6px;margin-bottom:12px;overflow-x:auto">
+            <a id="gog-auth-url" href="#" target="_blank" style="color:var(--accent);font-family:var(--mono);font-size:11px;word-break:break-all"></a>
+          </div>
+          <div style="font-size:12px;color:var(--warn);margin-bottom:8px">
+            Step 2: Setelah approve, paste URL redirect dari browser ke sini:
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="text" id="gog-auth-code" placeholder="Paste redirect URL di sini..."
+              style="font-family:var(--mono);font-size:11px;background:var(--surface);color:var(--text);border:1px solid var(--border);padding:8px 12px;border-radius:6px;flex:1">
+            <button class="btn btn-ghost btn-sm" onclick="gogAuthComplete()">Verify</button>
+          </div>
+        </div>
+        <div id="gog-auth-result" style="margin-top:8px;font-family:var(--mono);font-size:12px"></div>
+      </div>
+
+      <div style="margin-top:16px">
+        <button class="btn btn-ghost btn-sm" onclick="loadGogStatus()">Refresh</button>
+      </div>
+    </section>
+
     <!-- TOKEN GUARD -->
     <section class="section" id="tab-tokenguard">
       <div class="section-title">Token Guard — Spike Detection & Budget Monitor</div>
@@ -896,6 +1081,10 @@ document.querySelectorAll('.nav-item').forEach(el => {
     // Auto-load data on tab open
     if (el.dataset.tab === 'usage') loadUsage(168);
     if (el.dataset.tab === 'tokenguard') loadTokenGuard();
+    if (el.dataset.tab === 'system') loadSystem();
+    if (el.dataset.tab === 'sessions') loadSessions();
+    if (el.dataset.tab === 'intents') loadIntentCache();
+    if (el.dataset.tab === 'gworkspace') loadGogStatus();
   });
 });
 
@@ -1561,6 +1750,190 @@ async function saveTokenGuardBudgets() {
       showToast('Error: ' + (d.error || 'unknown'), 'err');
     }
   } catch(e) { showToast('Failed to save budgets', 'err'); }
+}
+
+// SYSTEM MONITOR
+function fmtBytes(b) {
+  if (!b) return '0 B';
+  const u = ['B','KB','MB','GB','TB'];
+  const i = Math.floor(Math.log(b)/Math.log(1024));
+  return (b/Math.pow(1024,i)).toFixed(1)+' '+u[i];
+}
+
+async function loadSystem() {
+  try {
+    const d = await apiFetch('/system');
+    if (d.error) return;
+    // CPU
+    const cpuPct = d.cpu.usage_pct;
+    document.getElementById('sys-cpu').textContent = cpuPct + '%';
+    document.getElementById('sys-cpu-bar').style.width = Math.min(cpuPct, 100) + '%';
+    document.getElementById('sys-cpu-bar').style.background = cpuPct > 80 ? 'var(--danger)' : 'var(--accent)';
+    // Memory
+    const memPct = d.memory.usage_pct;
+    document.getElementById('sys-mem').textContent = fmtBytes(d.memory.used) + ' / ' + fmtBytes(d.memory.total);
+    document.getElementById('sys-mem-bar').style.width = memPct + '%';
+    document.getElementById('sys-mem-bar').style.background = memPct > 85 ? 'var(--danger)' : 'var(--accent2)';
+    // Disk
+    const diskPct = d.disk.usage_pct;
+    document.getElementById('sys-disk').textContent = fmtBytes(d.disk.used) + ' / ' + fmtBytes(d.disk.total);
+    document.getElementById('sys-disk-bar').style.width = diskPct + '%';
+    document.getElementById('sys-disk-bar').style.background = diskPct > 90 ? 'var(--danger)' : 'var(--warn)';
+    // Pawang RSS
+    document.getElementById('sys-pawang').textContent = fmtBytes(d.memory.pawang_rss);
+    // Detail table
+    const rows = [
+      ['CPU Cores', d.cpu.cores],
+      ['Load 1m / 5m / 15m', `${d.cpu.load_1m} / ${d.cpu.load_5m} / ${d.cpu.load_15m}`],
+      ['Memory Used', fmtBytes(d.memory.used)],
+      ['Memory Available', fmtBytes(d.memory.available)],
+      ['Disk Free', fmtBytes(d.disk.free)],
+      ['Pawang Process', fmtBytes(d.memory.pawang_rss)],
+    ];
+    document.getElementById('sys-detail-tbody').innerHTML = rows.map(([k,v]) =>
+      `<tr style="border-bottom:1px solid var(--border)"><td style="padding:8px 6px;color:var(--text-dim)">${k}</td><td style="padding:8px 6px;text-align:right">${v}</td></tr>`
+    ).join('');
+  } catch(e) { console.error('system load error', e); }
+}
+
+// SESSIONS
+async function loadSessions() {
+  try {
+    const d = await apiFetch('/sessions');
+    document.getElementById('sess-count').textContent = d.count || 0;
+    const tbody = document.getElementById('sess-tbody');
+    if (!d.sessions || !d.sessions.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text-dim);padding:16px;text-align:center">No active sessions</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.sessions.map(s => `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px 6px"><span style="color:var(--accent)">${s.agent_name}</span> <span style="color:var(--text-dim);font-size:10px">${s.agent_id}</span></td>
+      <td style="padding:8px 6px">${s.user_id}</td>
+      <td style="padding:8px 6px;color:var(--text-dim)">${s.provider ? s.provider+'/' : ''}${s.model || 'default'}</td>
+      <td style="padding:8px 6px;text-align:right">${s.messages}</td>
+    </tr>`).join('');
+  } catch(e) { console.error('sessions load error', e); }
+}
+
+// INTENT CACHE
+async function loadIntentCache() {
+  try {
+    const d = await apiFetch('/intent-cache');
+    const st = d.stats || {};
+    document.getElementById('ic-patterns').textContent = st.patterns || 0;
+    document.getElementById('ic-hits').textContent = st.total_hits || 0;
+    document.getElementById('ic-successes').textContent = st.successes || 0;
+    document.getElementById('ic-saved').textContent = st.total_hits || 0;
+    const tbody = document.getElementById('ic-tbody');
+    const patterns = d.patterns || [];
+    if (!patterns.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text-dim);padding:16px;text-align:center">No patterns learned yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = patterns.map(p => {
+      const total = (p.success_count||0)+(p.fail_count||0);
+      const rel = total > 0 ? Math.round(p.success_count/total*100) : 0;
+      const relColor = rel >= 80 ? 'var(--success)' : rel >= 50 ? 'var(--warn)' : 'var(--danger)';
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:8px 6px;color:var(--accent)">${p.tool_name}</td>
+        <td style="padding:8px 6px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.example_query||'—'}</td>
+        <td style="padding:8px 6px;text-align:right">${p.hit_count||0}</td>
+        <td style="padding:8px 6px;text-align:right;color:var(--success)">${p.success_count||0}</td>
+        <td style="padding:8px 6px;text-align:right;color:var(--danger)">${p.fail_count||0}</td>
+        <td style="padding:8px 6px;text-align:right;color:${relColor}">${rel}%</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.error('intent cache load error', e); }
+}
+
+// GOOGLE WORKSPACE (gog CLI)
+let _gogAuthEmail = '';
+
+async function loadGogStatus() {
+  try {
+    const d = await apiFetch('/gog/status');
+    const div = document.getElementById('gog-accounts');
+    if (d.error) {
+      div.innerHTML = `<span style="color:var(--danger)">${d.error}</span>`;
+      return;
+    }
+    const accts = d.accounts || [];
+    if (!accts.length) {
+      div.innerHTML = '<span style="color:var(--text-dim)">No accounts connected</span>';
+      return;
+    }
+    div.innerHTML = accts.map(a => {
+      const email = typeof a === 'string' ? a : (a.email || a.account || JSON.stringify(a));
+      return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)">
+        <span style="color:var(--success)">&#10003;</span>
+        <span style="color:var(--text)">${email}</span>
+        <button class="btn btn-ghost btn-sm" style="margin-left:auto;color:var(--danger);font-size:10px" onclick="gogRemove('${email}')">Remove</button>
+      </div>`;
+    }).join('');
+  } catch(e) { console.error('gog status error', e); }
+}
+
+async function gogAuthStart() {
+  const email = document.getElementById('gog-email').value.trim();
+  if (!email || !email.includes('@')) { showToast('Enter valid email', 'err'); return; }
+  _gogAuthEmail = email;
+  document.getElementById('gog-auth-result').innerHTML = '<span style="color:var(--text-dim)">Starting auth...</span>';
+  try {
+    const d = await apiFetch('/gog/auth-start', {
+      method: 'POST',
+      body: JSON.stringify({ email, services: 'gmail,calendar,sheets' })
+    });
+    if (d.error) {
+      document.getElementById('gog-auth-result').innerHTML = `<span style="color:var(--danger)">Error: ${d.error}</span>`;
+      return;
+    }
+    document.getElementById('gog-auth-url').href = d.url;
+    document.getElementById('gog-auth-url').textContent = d.url;
+    document.getElementById('gog-auth-flow').style.display = 'block';
+    document.getElementById('gog-auth-result').innerHTML = '<span style="color:var(--accent)">Buka link di atas, approve, lalu paste redirect URL</span>';
+  } catch(e) {
+    document.getElementById('gog-auth-result').innerHTML = `<span style="color:var(--danger)">${e}</span>`;
+  }
+}
+
+async function gogAuthComplete() {
+  const authUrl = document.getElementById('gog-auth-code').value.trim();
+  if (!authUrl) { showToast('Paste redirect URL dulu', 'err'); return; }
+  document.getElementById('gog-auth-result').innerHTML = '<span style="color:var(--text-dim)">Verifying...</span>';
+  try {
+    const d = await apiFetch('/gog/auth-complete', {
+      method: 'POST',
+      body: JSON.stringify({ email: _gogAuthEmail, auth_url: authUrl, services: 'gmail,calendar,sheets' })
+    });
+    if (d.ok) {
+      document.getElementById('gog-auth-flow').style.display = 'none';
+      document.getElementById('gog-auth-code').value = '';
+      document.getElementById('gog-email').value = '';
+      document.getElementById('gog-auth-result').innerHTML = `<span style="color:var(--success)">Connected: ${d.email}</span>`;
+      showToast('Google account connected!', 'ok');
+      loadGogStatus();
+    } else {
+      document.getElementById('gog-auth-result').innerHTML = `<span style="color:var(--danger)">Error: ${d.error}</span>`;
+    }
+  } catch(e) {
+    document.getElementById('gog-auth-result').innerHTML = `<span style="color:var(--danger)">${e}</span>`;
+  }
+}
+
+async function gogRemove(email) {
+  if (!confirm('Remove Google account: ' + email + '?')) return;
+  try {
+    const d = await apiFetch('/gog/auth-remove', {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    });
+    if (d.ok) {
+      showToast('Account removed', 'ok');
+      loadGogStatus();
+    } else {
+      showToast('Error: ' + (d.error||'unknown'), 'err');
+    }
+  } catch(e) { showToast('Failed', 'err'); }
 }
 
 // INIT

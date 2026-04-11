@@ -500,6 +500,115 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # --- Google Workspace (gog CLI) ---
+    {
+        "type": "function",
+        "function": {
+            "name": "gog_gmail",
+            "description": (
+                "Baca email dari Gmail (READ ONLY). "
+                "Bisa search, list, lihat detail email. Tidak bisa kirim email."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "get"],
+                        "description": "search=cari email, get=baca detail 1 email by ID",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Gmail search query (misal: 'is:unread', 'from:boss@email.com', 'newer_than:1d', 'invoice')",
+                    },
+                    "message_id": {
+                        "type": "string",
+                        "description": "Message ID untuk action 'get'",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Jumlah hasil max (default 10)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gog_calendar",
+            "description": (
+                "Google Calendar — lihat jadwal dan buat event baru. "
+                "Bisa list events hari ini/besok/minggu ini, atau buat event."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "create"],
+                        "description": "list=lihat jadwal, create=buat event baru",
+                    },
+                    "time_range": {
+                        "type": "string",
+                        "enum": ["today", "tomorrow", "week"],
+                        "description": "Range waktu untuk list (default: today)",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Judul event (untuk create)",
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "Waktu mulai event, format ISO: 2026-04-12T14:00:00 (untuk create)",
+                    },
+                    "duration": {
+                        "type": "string",
+                        "description": "Durasi event: 30m, 1h, 2h (default 1h, untuk create)",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Deskripsi/notes event (opsional)",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "gog_sheets",
+            "description": (
+                "Google Sheets — baca dan tulis data spreadsheet. "
+                "Bisa get range, update cell, append baris baru."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["get", "update", "append"],
+                        "description": "get=baca data, update=ubah cell, append=tambah baris",
+                    },
+                    "spreadsheet_id": {
+                        "type": "string",
+                        "description": "Spreadsheet ID (dari URL Google Sheets)",
+                    },
+                    "range": {
+                        "type": "string",
+                        "description": "Range sel: 'Sheet1!A1:D10', 'A1:B5', 'Sheet1'",
+                    },
+                    "values": {
+                        "type": "string",
+                        "description": "Data untuk update/append (comma separated per kolom)",
+                    },
+                },
+                "required": ["action", "spreadsheet_id", "range"],
+            },
+        },
+    },
 ]
 
 
@@ -510,7 +619,7 @@ AGENT_TOOLS = {
     "agent1": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather",
                "save_memory", "recall_memories", "delete_memory",
                "python_exec", "wikipedia", "translate", "calculator", "code_search",
-               "skill_hub"],
+               "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets"],
     "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
                "file_read", "file_write", "python_exec", "translate"],
     "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search",
@@ -521,7 +630,7 @@ AGENT_TOOLS = {
     "agent5": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather",
                "save_memory", "recall_memories", "delete_memory",
                "python_exec", "wikipedia", "translate", "calculator", "code_search",
-               "skill_hub"],
+               "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets"],
     "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
                "file_read", "file_write", "python_exec", "translate"],
     "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search",
@@ -872,6 +981,16 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
         result = await execute_skill_hub(action, query=query, name=query)
         return ToolResult(name="skill_hub", output=result, success=True)
 
+    # --- Google Workspace (gog CLI) ---
+    elif name == "gog_gmail":
+        return await _gog_gmail(arguments)
+
+    elif name == "gog_calendar":
+        return await _gog_calendar(arguments)
+
+    elif name == "gog_sheets":
+        return await _gog_sheets(arguments)
+
     elif name.startswith("mcp_"):
         # MCP tool call — route to MCP manager
         try:
@@ -1081,3 +1200,109 @@ async def _code_search(pattern: str, path: str = "", file_type: str = "") -> Too
         return ToolResult(name="code_search", output="Timeout", success=False)
     except Exception as e:
         return ToolResult(name="code_search", output=str(e), success=False)
+
+
+# --- Google Workspace (gog CLI) ---
+
+GOG_BIN = "/usr/local/bin/gog"
+GOG_ACCOUNT = os.environ.get("GOG_ACCOUNT", "")
+
+
+async def _run_gog(args: list[str], timeout: int = 30) -> tuple[str, bool]:
+    """Run gog CLI command, return (output, success)."""
+    cmd = [GOG_BIN] + args + ["--json", "--no-input"]
+    if GOG_ACCOUNT:
+        cmd += ["-a", GOG_ACCOUNT]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        output = stdout.decode(errors="replace").strip()
+        if not output and stderr:
+            output = stderr.decode(errors="replace").strip()
+        return output[:4000], proc.returncode == 0
+    except asyncio.TimeoutError:
+        return "Timeout", False
+    except FileNotFoundError:
+        return "gog CLI not installed (run: curl install)", False
+    except Exception as e:
+        return str(e), False
+
+
+async def _gog_gmail(args: dict) -> ToolResult:
+    """Gmail read-only: search and get."""
+    action = args.get("action", "search")
+
+    if action == "search":
+        query = args.get("query", "is:unread")
+        max_r = str(args.get("max_results", 10))
+        output, ok = await _run_gog(["gmail", "search", query, "--max", max_r])
+        return ToolResult(name="gog_gmail", output=output, success=ok)
+
+    elif action == "get":
+        msg_id = args.get("message_id", "")
+        if not msg_id:
+            return ToolResult(name="gog_gmail", output="Error: message_id required", success=False)
+        output, ok = await _run_gog(["gmail", "get", msg_id])
+        return ToolResult(name="gog_gmail", output=output, success=ok)
+
+    return ToolResult(name="gog_gmail", output=f"Unknown action: {action}", success=False)
+
+
+async def _gog_calendar(args: dict) -> ToolResult:
+    """Calendar: list events and create events."""
+    action = args.get("action", "list")
+
+    if action == "list":
+        time_range = args.get("time_range", "today")
+        flag = f"--{time_range}" if time_range in ("today", "tomorrow", "week") else "--today"
+        output, ok = await _run_gog(["calendar", "events", flag])
+        return ToolResult(name="gog_calendar", output=output, success=ok)
+
+    elif action == "create":
+        title = args.get("title", "")
+        start = args.get("start", "")
+        if not title or not start:
+            return ToolResult(name="gog_calendar", output="Error: title dan start wajib diisi", success=False)
+        duration = args.get("duration", "1h")
+        cmd = ["calendar", "create", "primary", "--title", title, "--start", start, "--duration", duration]
+        desc = args.get("description", "")
+        if desc:
+            cmd += ["--description", desc]
+        output, ok = await _run_gog(cmd)
+        return ToolResult(name="gog_calendar", output=output, success=ok)
+
+    return ToolResult(name="gog_calendar", output=f"Unknown action: {action}", success=False)
+
+
+async def _gog_sheets(args: dict) -> ToolResult:
+    """Sheets: get, update, append."""
+    action = args.get("action", "get")
+    sheet_id = args.get("spreadsheet_id", "")
+    range_ = args.get("range", "")
+
+    if not sheet_id:
+        return ToolResult(name="gog_sheets", output="Error: spreadsheet_id required", success=False)
+    if not range_:
+        return ToolResult(name="gog_sheets", output="Error: range required (e.g. 'Sheet1!A1:D10')", success=False)
+
+    if action == "get":
+        output, ok = await _run_gog(["sheets", "get", sheet_id, range_])
+        return ToolResult(name="gog_sheets", output=output, success=ok)
+
+    elif action == "update":
+        values = args.get("values", "")
+        if not values:
+            return ToolResult(name="gog_sheets", output="Error: values required", success=False)
+        output, ok = await _run_gog(["sheets", "update", sheet_id, range_, values])
+        return ToolResult(name="gog_sheets", output=output, success=ok)
+
+    elif action == "append":
+        values = args.get("values", "")
+        if not values:
+            return ToolResult(name="gog_sheets", output="Error: values required", success=False)
+        output, ok = await _run_gog(["sheets", "append", sheet_id, range_, values])
+        return ToolResult(name="gog_sheets", output=output, success=ok)
+
+    return ToolResult(name="gog_sheets", output=f"Unknown action: {action}", success=False)

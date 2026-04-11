@@ -3,7 +3,7 @@
 # Usage: generate-image.sh "<prompt>" "[caption]" [chat_id]
 #
 # Models (auto-fallback chain):
-#   openai_gpt → gemini_native → gemini_imagen → kieai_flux → kieai_gpt4o
+#   openai_gpt → banana (gemini3pro) → gemini_flash → imagen4 → kieai_flux → kieai_gpt4o
 #
 # API keys dibaca dari /root/pawang/.env
 
@@ -56,7 +56,33 @@ if items:
   [ -f "$OUT" ] && [ -s "$OUT" ] && echo "$OUT"
 }
 
-# ── Model 2: Gemini Native Image (gemini-2.5-flash-image) ────────────────
+# ── Model 2: Nano Banana Pro (Gemini 3 Pro Image) ───────────────────────
+
+gen_banana() {
+  echo "[gen] Nano Banana Pro (Gemini 3 Pro)..." >&2
+  local OUT=/tmp/img-banana-$(date +%s).png
+  [ -z "$GEMINI_KEY" ] && return 1
+  local RESP=$(curl -s --max-time 120 -X POST \
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${GEMINI_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"contents\":[{\"parts\":[{\"text\":\"Generate an image: ${PROMPT_ESCAPED}\"}]}],\"generationConfig\":{\"responseModalities\":[\"TEXT\",\"IMAGE\"]}}")
+  echo "$RESP" | python3 -c "
+import json,sys,base64
+d=json.load(sys.stdin)
+candidates=d.get('candidates',[])
+if candidates:
+    parts=candidates[0].get('content',{}).get('parts',[])
+    for p in parts:
+        if 'inlineData' in p:
+            data=p['inlineData'].get('data','')
+            if data:
+                open('$OUT','wb').write(base64.b64decode(data))
+                break
+" 2>/dev/null
+  [ -f "$OUT" ] && [ -s "$OUT" ] && echo "$OUT"
+}
+
+# ── Model 3: Gemini 2.5 Flash Image (native) ────────────────────────────
 
 gen_gemini_native() {
   echo "[gen] Gemini 2.5 Flash Image (native)..." >&2
@@ -82,7 +108,7 @@ if candidates:
   [ -f "$OUT" ] && [ -s "$OUT" ] && echo "$OUT"
 }
 
-# ── Model 3: Google Imagen 4.0 (predict API) ─────────────────────────────
+# ── Model 4: Google Imagen 4.0 (predict API) ─────────────────────────────
 
 gen_imagen4() {
   echo "[gen] Google Imagen 4.0..." >&2
@@ -104,7 +130,7 @@ if preds:
   [ -f "$OUT" ] && [ -s "$OUT" ] && echo "$OUT"
 }
 
-# ── Model 4: kie.ai Flux Kontext ─────────────────────────────────────────
+# ── Model 5: kie.ai Flux Kontext ─────────────────────────────────────────
 
 gen_flux() {
   echo "[gen] Flux Kontext (kie.ai)..." >&2
@@ -133,7 +159,7 @@ print(r.get('resultImageUrl','') or (r.get('imageList') or [''])[0])
   return 1
 }
 
-# ── Model 5: kie.ai GPT-4o Image ─────────────────────────────────────────
+# ── Model 6: kie.ai GPT-4o Image ─────────────────────────────────────────
 
 gen_kieai_gpt4o() {
   echo "[gen] GPT-4o Image (kie.ai)..." >&2
@@ -167,7 +193,7 @@ print(urls[0] if urls else '')
 
 echo "[img] Starting image generation..." >&2
 
-for MODEL_FN in gen_openai gen_gemini_native gen_imagen4 gen_flux gen_kieai_gpt4o; do
+for MODEL_FN in gen_openai gen_banana gen_gemini_native gen_imagen4 gen_flux gen_kieai_gpt4o; do
   RESULT=$($MODEL_FN)
   if [ -n "$RESULT" ] && [ -f "$RESULT" ] && [ -s "$RESULT" ]; then
     bash "$TG_SEND" "$RESULT" "$CAPTION" "$CHAT_ID"

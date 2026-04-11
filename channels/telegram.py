@@ -2318,6 +2318,8 @@ class TelegramBot:
             max_tokens=max_ctx,
         )
 
+        _learned_tools = []  # Track tool calls for intent learning
+
         try:
             for iteration in range(max_iterations):
                 await update.message.chat.send_action(ChatAction.TYPING)
@@ -2355,6 +2357,19 @@ class TelegramBot:
                                    user_prompt, final_text)
                     except Exception:
                         pass
+
+                    # Intent learning: single tool call → cache pattern
+                    if len(_learned_tools) == 1 and _learned_tools[0]["ok"]:
+                        try:
+                            from core.intent_cache import get_intent_cache
+                            get_intent_cache().learn(
+                                update.message.text or "",
+                                _learned_tools[0]["name"],
+                                _learned_tools[0]["args"],
+                                agent_id,
+                            )
+                        except Exception:
+                            pass
 
                     # Voice reply if enabled
                     uid_int = update.effective_user.id
@@ -2495,6 +2510,10 @@ class TelegramBot:
                             "output": snippet,
                             "ok": result.success,
                         })
+                        _learned_tools.append({
+                            "name": tc.name, "args": args,
+                            "ok": result.success,
+                        })
 
                 # Check interrupt after tools
                 if self._interrupted.get(user_id):
@@ -2585,6 +2604,36 @@ class TelegramBot:
                     return
             except Exception:
                 pass
+
+        # Intent cache: learned tool patterns → execute directly, 0 API cost
+        if not resume_from:
+            try:
+                from core.intent_cache import get_intent_cache
+                from core.tools import execute_tool as _exec_tool
+                intent = get_intent_cache().match(prompt, agent_id)
+                if intent:
+                    result = await _exec_tool(
+                        intent.tool_name, intent.tool_args,
+                        str(update.effective_chat.id),
+                        user_id=user_id, agent_id=agent_id,
+                    )
+                    if result.success:
+                        get_intent_cache().record_hit(intent.pattern_id, True)
+                        text = f"⚡ {result.output}"
+                        self.manager.save_message(session, "assistant", text,
+                                                   model="intent-cache", provider="local")
+                        for i in range(0, len(text), 4096):
+                            await update.message.reply_text(text[i:i+4096])
+                        await hooks.emit("message:sent", user_id=user_id,
+                                         agent_id=agent_id, text=text[:200])
+                        log.info(f"Intent cache HIT: {intent.tool_name} "
+                                 f"(conf={intent.confidence:.2f})")
+                        return
+                    else:
+                        get_intent_cache().record_hit(intent.pattern_id, False)
+                        # Fall through to normal AI
+            except Exception as e:
+                log.debug(f"Intent cache error: {e}")
 
         # Dual-model routing: if agent has chat_model, use it for simple messages
         # Complex messages (tool-needing) → primary model with tool loop

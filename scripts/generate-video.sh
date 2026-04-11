@@ -2,7 +2,7 @@
 # Generate video + kirim ke Telegram
 # Usage: generate-video.sh "<prompt>" "[caption]" [chat_id]
 #
-# Models (auto-fallback): veo3f → runway → kling3 → hailuo → google_veo
+# Models (auto-fallback): veo3f → seedance2 → runway → kling3 → hailuo → google_veo
 # API keys dari /root/pawang/.env
 
 PROMPT="$1"
@@ -74,6 +74,19 @@ gen_veo3f() {
     if [ -n "$URL" ]; then curl -s -L "$URL" -o "$OUT"; [ -s "$OUT" ] && echo "$OUT" && return 0; fi
   done
   return 1
+}
+
+gen_seedance2() {
+  echo "[gen] Seedance 2.0 (ByteDance)..." >&2
+  [ -z "$KIEAI_KEY" ] && return 1
+  local RESP=$(curl -s -X POST "https://api.kie.ai/api/v1/jobs/createTask" \
+    -H "Authorization: Bearer $KIEAI_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"bytedance/seedance-2\",\"input\":{\"prompt\":\"$PROMPT\",\"duration\":\"5\",\"aspect_ratio\":\"16:9\"}}")
+  local TASK=$(echo "$RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('data',{}).get('taskId',''))" 2>/dev/null)
+  [ -z "$TASK" ] && return 1
+  local URL=$(poll_jobs "$TASK" 300)
+  [ -z "$URL" ] && return 1
+  curl -s -L "$URL" -o "$OUT"; [ -s "$OUT" ] && echo "$OUT"
 }
 
 gen_runway() {
@@ -160,7 +173,7 @@ print(s[0].get('video',{}).get('uri','') if s else '')
 echo "[vid] Starting video generation..." >&2
 tg_msg "Generating video... (ini bisa 1-5 menit)"
 
-for MODEL_FN in gen_veo3f gen_runway gen_kling3 gen_hailuo gen_google_veo; do
+for MODEL_FN in gen_veo3f gen_seedance2 gen_runway gen_kling3 gen_hailuo gen_google_veo; do
   RESULT=$($MODEL_FN)
   if [ -n "$RESULT" ] && [ -f "$RESULT" ] && [ -s "$RESULT" ]; then
     bash "$TG_SEND" "$RESULT" "$CAPTION" "$CHAT_ID"

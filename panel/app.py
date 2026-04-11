@@ -737,6 +737,242 @@ async def panel_provider_delete(request: Request):
     return JSONResponse({"ok": True, "deleted": pid})
 
 
+@require_auth
+async def panel_system(request: Request):
+    """System resource monitor — CPU, RAM, disk, load."""
+    import shutil
+    try:
+        # CPU load
+        with open("/proc/loadavg") as f:
+            parts = f.read().split()
+            load_1, load_5, load_15 = float(parts[0]), float(parts[1]), float(parts[2])
+        cpu_count = os.cpu_count() or 1
+
+        # Memory from /proc/meminfo
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, val = line.split(":", 1)
+                mem[key.strip()] = int(val.strip().split()[0]) * 1024  # kB → bytes
+        mem_total = mem.get("MemTotal", 0)
+        mem_avail = mem.get("MemAvailable", 0)
+        mem_used = mem_total - mem_avail
+
+        # Disk
+        disk = shutil.disk_usage("/")
+
+        # Pawang process memory
+        pawang_rss = 0
+        try:
+            with open(f"/proc/{os.getpid()}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        pawang_rss = int(line.split()[1]) * 1024
+                        break
+        except Exception:
+            pass
+
+        return JSONResponse({
+            "cpu": {
+                "load_1m": load_1, "load_5m": load_5, "load_15m": load_15,
+                "cores": cpu_count,
+                "usage_pct": round(load_1 / cpu_count * 100, 1),
+            },
+            "memory": {
+                "total": mem_total, "used": mem_used, "available": mem_avail,
+                "usage_pct": round(mem_used / mem_total * 100, 1) if mem_total else 0,
+                "pawang_rss": pawang_rss,
+            },
+            "disk": {
+                "total": disk.total, "used": disk.used, "free": disk.free,
+                "usage_pct": round(disk.used / disk.total * 100, 1) if disk.total else 0,
+            },
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@require_auth
+async def panel_sessions(request: Request):
+    """Active sessions overview."""
+    try:
+        from main import agent_manager
+        config = get_config()
+        sessions = []
+        if agent_manager:
+            for sess in agent_manager.list_sessions():
+                agent = config.get_agent(sess.agent_id)
+                sessions.append({
+                    "key": sess.key,
+                    "agent_id": sess.agent_id,
+                    "agent_name": agent.name if agent else sess.agent_id,
+                    "user_id": sess.user_id,
+                    "messages": len(sess.get_messages()),
+                    "model": getattr(sess, 'active_model', '') or '',
+                    "provider": getattr(sess, 'active_provider', '') or '',
+                })
+        return JSONResponse({"sessions": sessions, "count": len(sessions)})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@require_auth
+async def panel_intent_cache(request: Request):
+    """Intent cache stats + patterns."""
+    try:
+        from core.intent_cache import get_intent_cache
+        cache = get_intent_cache()
+        return JSONResponse({
+            "stats": cache.get_stats(),
+            "patterns": cache.list_patterns(),
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# --- Google Workspace (gog CLI) ---
+
+GOG_BIN = "/usr/local/bin/gog"
+
+
+@require_auth
+async def panel_gog_status(request: Request):
+    """GET — list gog accounts and auth status."""
+    import asyncio
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            GOG_BIN, "auth", "list", "--json",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        output = stdout.decode(errors="replace").strip()
+        if not output or proc.returncode != 0:
+            return JSONResponse({"accounts": [], "raw": stderr.decode(errors="replace")})
+        import json as _json
+        try:
+            accounts = _json.loads(output)
+        except _json.JSONDecodeError:
+            accounts = []
+        return JSONResponse({"accounts": accounts if isinstance(accounts, list) else []})
+    except FileNotFoundError:
+        return JSONResponse({"error": "gog CLI not installed"}, status_code=404)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@require_auth
+async def panel_gog_auth_start(request: Request):
+    """POST — start gog auth flow (remote 2-step). Returns auth URL."""
+    import asyncio
+    data = await request.json()
+    email = data.get("email", "").strip()
+    if not email or "@" not in email:
+        return JSONResponse({"error": "Valid email required"}, status_code=400)
+
+    # Build scopes: gmail readonly, calendar+sheets full
+    services = data.get("services", "gmail,calendar,sheets")
+    gmail_scope = "readonly"
+
+    cmd = [
+        GOG_BIN, "auth", "add", email,
+        "--remote", "--step", "1",
+        "--services", services,
+        "--gmail-scope", gmail_scope,
+        "--json", "--no-input",
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        output = stdout.decode(errors="replace").strip()
+        err = stderr.decode(errors="replace").strip()
+
+        if proc.returncode != 0:
+            return JSONResponse({"error": err or output or "Failed to start auth"}, status_code=500)
+
+        # Try parse JSON for auth URL
+        import json as _json
+        try:
+            result = _json.loads(output)
+            url = result.get("url", "") or result.get("auth_url", "")
+        except _json.JSONDecodeError:
+            # Fallback: extract URL from text output
+            import re
+            urls = re.findall(r'https://accounts\.google\.com/\S+', output + err)
+            url = urls[0] if urls else ""
+
+        if not url:
+            return JSONResponse({"error": "No auth URL found", "raw": output}, status_code=500)
+
+        return JSONResponse({"url": url, "email": email})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@require_auth
+async def panel_gog_auth_complete(request: Request):
+    """POST — complete gog auth flow (step 2: exchange code/URL)."""
+    import asyncio
+    data = await request.json()
+    email = data.get("email", "").strip()
+    auth_url = data.get("auth_url", "").strip()
+
+    if not email or not auth_url:
+        return JSONResponse({"error": "email and auth_url required"}, status_code=400)
+
+    services = data.get("services", "gmail,calendar,sheets")
+    gmail_scope = "readonly"
+
+    cmd = [
+        GOG_BIN, "auth", "add", email,
+        "--remote", "--step", "2",
+        "--auth-url", auth_url,
+        "--services", services,
+        "--gmail-scope", gmail_scope,
+        "--json", "--no-input",
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        output = stdout.decode(errors="replace").strip()
+        err = stderr.decode(errors="replace").strip()
+
+        if proc.returncode == 0:
+            # Update GOG_ACCOUNT in .env
+            env_path = Path(__file__).parent.parent / ".env"
+            _update_env_file(env_path, "GOG_ACCOUNT", email)
+            os.environ["GOG_ACCOUNT"] = email
+            log.info(f"Panel: gog auth completed for {email}")
+            return JSONResponse({"ok": True, "email": email})
+        else:
+            return JSONResponse({"error": err or output or "Auth failed"}, status_code=500)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@require_auth
+async def panel_gog_auth_remove(request: Request):
+    """POST — remove a gog account."""
+    import asyncio
+    data = await request.json()
+    email = data.get("email", "").strip()
+    if not email:
+        return JSONResponse({"error": "email required"}, status_code=400)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            GOG_BIN, "auth", "remove", email, "--force",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=10)
+        log.info(f"Panel: gog auth removed for {email}")
+        return JSONResponse({"ok": True, "removed": email})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # --- Routes ---
 
 panel_routes = [
@@ -755,4 +991,11 @@ panel_routes = [
     Route("/panel/api/providers/add", panel_provider_add, methods=["POST"]),
     Route("/panel/api/providers/edit", panel_provider_edit, methods=["POST"]),
     Route("/panel/api/providers/delete", panel_provider_delete, methods=["POST"]),
+    Route("/panel/api/system", panel_system),
+    Route("/panel/api/sessions", panel_sessions),
+    Route("/panel/api/intent-cache", panel_intent_cache),
+    Route("/panel/api/gog/status", panel_gog_status),
+    Route("/panel/api/gog/auth-start", panel_gog_auth_start, methods=["POST"]),
+    Route("/panel/api/gog/auth-complete", panel_gog_auth_complete, methods=["POST"]),
+    Route("/panel/api/gog/auth-remove", panel_gog_auth_remove, methods=["POST"]),
 ]

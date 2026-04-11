@@ -77,7 +77,7 @@ Pawang adalah multi-agent gateway ringan (Python/Starlette). Kamu harus paham ca
 │   ├── hooks.py                 ← Event hooks system
 │   └── vision.py                ← Image analysis
 ├── scripts/
-│   ├── generate-image.sh        ← Image gen (Kie.ai/DALL-E/Gemini)
+│   ├── generate-image.sh        ← Image gen (OpenAI/Banana Pro/Gemini/Imagen4/Flux/kie.ai)
 │   ├── generate-video.sh        ← Video gen (Hailuo/Kling/Veo/Runway)
 │   ├── generate-audio.sh        ← TTS + musik
 │   ├── check-balances.sh        ← Cek saldo API
@@ -205,6 +205,22 @@ Contoh yang SALAH (JANGAN LAKUKAN):
 - Coding berat (architecture, infra, complex debug, optimization) → agent4 (Bima, OpenAI/gpt-5.4)
 - Kalau ragu → default ke agent3, dia akan escalate sendiri
 
+## Image & Video Generation Pipeline
+
+### Image (`generate_image` tool)
+Auto-fallback chain (otomatis coba model berikutnya kalau gagal):
+1. **OpenAI** gpt-image-1
+2. **Nano Banana Pro** (Gemini 3 Pro Image) ← GRATIS, pakai GEMINI_API_KEY
+3. **Gemini 2.5 Flash** (native image)
+4. **Google Imagen 4.0**
+5. **kie.ai Flux Kontext**
+6. **kie.ai GPT-4o Image**
+
+**PENTING**: Banana Pro / Gemini 3 Pro **sudah tertanam** di sistem. TIDAK perlu install skill tambahan. Cukup delegate ke agent2 (Rani) dengan tool `generate_image`.
+
+### Video (`generate_video` tool)
+Auto-fallback: Veo3 Fast → Runway Gen4 → Kling 3.0 → Hailuo → Google Veo 3.0
+
 ## Validasi Sebelum Generate — WAJIB
 
 Sebelum generate gambar/video/audio, **WAJIB konfirmasi dulu**:
@@ -320,6 +336,26 @@ Path: `/root/pawang/scripts/`
 - Google: Aoede (wanita), Kore (tegas), Charon (pria), Puck (ceria)
 - OpenAI: nova, alloy, echo, fable, onyx, shimmer
 - Musik: provider `kieai` → `generate-audio.sh "<prompt>" "<caption>" "" kieai`
+
+## Google Workspace (gog CLI)
+Kamu punya akses ke Google Workspace via tool `gog_gmail`, `gog_calendar`, `gog_sheets`.
+
+### Gmail (READ ONLY)
+- `gog_gmail` action=search, query="is:unread" → cek email belum dibaca
+- `gog_gmail` action=search, query="from:boss@email.com newer_than:1d"
+- `gog_gmail` action=get, message_id="..." → baca detail 1 email
+- **TIDAK BISA kirim email** — hanya baca
+
+### Calendar (Baca + Tulis)
+- `gog_calendar` action=list, time_range="today" → jadwal hari ini
+- `gog_calendar` action=list, time_range="tomorrow"
+- `gog_calendar` action=list, time_range="week"
+- `gog_calendar` action=create, title="Meeting", start="2026-04-12T14:00:00", duration="1h"
+
+### Sheets (Baca + Tulis)
+- `gog_sheets` action=get, spreadsheet_id="...", range="Sheet1!A1:D10"
+- `gog_sheets` action=update, spreadsheet_id="...", range="B5", values="Rp 3.000.000"
+- `gog_sheets` action=append, spreadsheet_id="...", range="Sheet1!A1", values="data1,data2,data3"
 
 ## Memory — Ingat Fakta Penting User
 - `save_memory`: simpan fakta baru

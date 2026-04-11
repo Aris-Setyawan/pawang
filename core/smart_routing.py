@@ -31,6 +31,10 @@ _TOOL_KEYWORDS = {
     "jalankan", "jalanin", "eksekusi", "execute", "run",
     # Balance / monitoring — butuh tool check_balances
     "balance", "saldo",
+    # Google Workspace — butuh gog tools
+    "email", "gmail", "inbox", "unread",
+    "calendar", "jadwal", "schedule", "event",
+    "sheets", "spreadsheet",
 }
 
 # Level 2: MUNGKIN butuh tools — hanya complex jika dikombinasi
