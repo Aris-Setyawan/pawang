@@ -599,8 +599,12 @@ class AgentManager:
             return summary, child_budget, "budget_exhausted"
 
         except Exception as e:
-            log.error(f"Delegation failed: {from_agent_id} -> {to_agent_id}: {e}")
-            return f"[Delegation error: {e}]", 0, "error"
+            log.error(
+                f"Delegation failed: {from_agent_id} -> {to_agent_id}: "
+                f"{type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            return f"[Delegation error: {type(e).__name__}: {e}]", 0, "error"
 
     @staticmethod
     def _build_child_summary(agent_id: str, history: list, reason: str) -> str:

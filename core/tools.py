@@ -622,8 +622,9 @@ AGENT_TOOLS = {
                "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets"],
     "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
                "file_read", "file_write", "python_exec", "translate"],
-    "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search",
-               "python_exec", "wikipedia", "calculator", "read_pdf", "code_search"],
+    "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_write",
+               "file_search", "send_file", "python_exec", "wikipedia", "calculator",
+               "read_pdf", "code_search"],
     "agent4": ["run_bash", "send_file", "web_search", "file_read", "file_write", "file_search",
                "python_exec", "code_search", "read_pdf"],
     # Backup agents mirror their primary
@@ -633,8 +634,9 @@ AGENT_TOOLS = {
                "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets"],
     "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
                "file_read", "file_write", "python_exec", "translate"],
-    "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_search",
-               "python_exec", "wikipedia", "calculator", "read_pdf", "code_search"],
+    "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_write",
+               "file_search", "send_file", "python_exec", "wikipedia", "calculator",
+               "read_pdf", "code_search"],
     "agent8": ["run_bash", "send_file", "web_search", "file_read", "file_write", "file_search",
                "python_exec", "code_search", "read_pdf"],
 }
