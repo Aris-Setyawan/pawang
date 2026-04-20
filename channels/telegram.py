@@ -2225,6 +2225,181 @@ class TelegramBot:
         update.message.text = text
         await self._handle_message(update, context)
 
+    async def _handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle document messages (PDF, Word, Excel, etc.) — extract text then process."""
+        if not update.message or not update.message.document:
+            return
+        if not self._is_allowed(update.effective_user.id):
+            return
+
+        import tempfile
+        import os
+        from pathlib import Path
+
+        user_id = str(update.effective_user.id)
+        document = update.message.document
+        file_name = document.file_name or "document"
+        file_size = document.file_size or 0
+        
+        # Rate limit
+        allowed, _ = self.rate_limiter.check(user_id)
+        if not allowed:
+            wait = self.rate_limiter.get_wait_time(user_id)
+            await update.message.reply_text(f"Rate limit — tunggu {int(wait)} detik.")
+            return
+
+        # File size limit (20MB)
+        MAX_SIZE = 20 * 1024 * 1024  # 20MB
+        if file_size > MAX_SIZE:
+            await update.message.reply_text(f"File terlalu besar ({file_size/1024/1024:.1f}MB). Maksimal 20MB.")
+            return
+
+        await update.message.chat.send_action(ChatAction.TYPING)
+        status_msg = await update.message.reply_text(f"📄 Downloading {file_name}...")
+
+        # Download document
+        try:
+            tg_file = await document.get_file()
+            suffix = Path(file_name).suffix or ".bin"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp_path = tmp.name
+            await tg_file.download_to_drive(tmp_path)
+        except Exception as e:
+            log.error(f"Document download error: {e}")
+            await status_msg.edit_text(f"Gagal download file: {e}")
+            return
+
+        await status_msg.edit_text(f"📄 Processing {file_name}...")
+
+        # Extract text based on file type
+        extracted_text = ""
+        try:
+            file_ext = Path(file_name).suffix.lower()
+            
+            if file_ext == '.pdf':
+                # Extract text from PDF
+                try:
+                    import PyPDF2
+                    with open(tmp_path, 'rb') as f:
+                        pdf_reader = PyPDF2.PdfReader(f)
+                        text_parts = []
+                        for page_num in range(len(pdf_reader.pages)):
+                            page = pdf_reader.pages[page_num]
+                            text = page.extract_text()
+                            if text:
+                                text_parts.append(f"--- Page {page_num+1} ---\n{text}")
+                        extracted_text = "\n\n".join(text_parts)
+                except ImportError:
+                    # Fallback: try pdftotext command if available
+                    try:
+                        import subprocess
+                        result = subprocess.run(['pdftotext', tmp_path, '-'], 
+                                              capture_output=True, text=True, timeout=10)
+                        if result.returncode == 0 and result.stdout:
+                            extracted_text = result.stdout
+                        else:
+                            extracted_text = "[PDF processing requires PyPDF2 or pdftotext]"
+                    except:
+                        extracted_text = "[PDF processing requires PyPDF2 library]"
+                except Exception as e:
+                    extracted_text = f"[PDF extraction error: {e}]"
+                    
+            elif file_ext in ['.txt', '.md', '.json', '.xml', '.yaml', '.yml', '.csv', '.log']:
+                # Read text files directly
+                try:
+                    with open(tmp_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        extracted_text = f.read()
+                except:
+                    with open(tmp_path, 'r', encoding='latin-1', errors='ignore') as f:
+                        extracted_text = f.read()
+                        
+            elif file_ext in ['.doc', '.docx']:
+                # Word documents
+                try:
+                    import docx
+                    doc = docx.Document(tmp_path)
+                    extracted_text = "\n".join([para.text for para in doc.paragraphs])
+                except ImportError:
+                    extracted_text = "[Word processing requires python-docx library]"
+                except Exception as e:
+                    extracted_text = f"[Word extraction error: {e}]"
+                    
+            elif file_ext in ['.xls', '.xlsx', '.xlsm']:
+                # Excel files
+                try:
+                    import pandas as pd
+                    df = pd.read_excel(tmp_path)
+                    extracted_text = df.to_string()
+                except ImportError:
+                    # Fallback: try to read as CSV if simple
+                    try:
+                        import csv
+                        with open(tmp_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            reader = csv.reader(f)
+                            rows = list(reader)
+                            extracted_text = "\n".join([", ".join(row) for row in rows])
+                    except:
+                        extracted_text = "[Excel processing requires pandas library]"
+                except Exception as e:
+                    extracted_text = f"[Excel extraction error: {e}]"
+                    
+            elif file_ext in ['.py', '.js', '.java', '.cpp', '.c', '.html', '.css', '.php', '.rb', '.go']:
+                # Source code files
+                try:
+                    with open(tmp_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        extracted_text = f.read()
+                except:
+                    with open(tmp_path, 'r', encoding='latin-1', errors='ignore') as f:
+                        extracted_text = f.read()
+                        
+            else:
+                # Try to read as binary and extract any text
+                try:
+                    with open(tmp_path, 'rb') as f:
+                        binary_data = f.read()
+                        # Try to decode as text
+                        try:
+                            extracted_text = binary_data.decode('utf-8', errors='ignore')
+                        except:
+                            extracted_text = binary_data.decode('latin-1', errors='ignore')
+                            
+                    if not extracted_text.strip():
+                        extracted_text = f"[Unsupported file format: {file_ext}. Supported: PDF, TXT, DOC/DOCX, XLS/XLSX, JSON, CSV, source code files]"
+                except Exception as e:
+                    extracted_text = f"[Cannot read file: {e}]"
+                
+        except Exception as e:
+            log.error(f"Document processing error: {e}")
+            extracted_text = f"[Processing error: {e}]"
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+
+        if not extracted_text or extracted_text.startswith("["):
+            # Error or unsupported format
+            await status_msg.edit_text(f"❌ Tidak bisa extract text dari {file_name}. {extracted_text}")
+            return
+
+        # Truncate if too long (Telegram message limit ~4000 chars)
+        if len(extracted_text) > 3500:
+            extracted_text = extracted_text[:3500] + "\n\n... [truncated]"
+
+        # Show extracted text preview
+        preview = f"📄 **{file_name}**\n\n"
+        preview += f"Size: {file_size/1024:.1f}KB\n"
+        preview += f"Extracted: {len(extracted_text)} characters\n\n"
+        preview += "**Extracted Text:**\n"
+        preview += extracted_text[:500] + ("..." if len(extracted_text) > 500 else "")
+        
+        await status_msg.edit_text(preview)
+
+        # Process as text message — inject text into update and reuse _handle_message
+        update.message.text = f"[File: {file_name}]\n\n{extracted_text}"
+        await self._handle_message(update, context)
+
     async def _handle_stop(self, update: Update, user_id: str, task):
         """Stop/pause running task, save partial response."""
         task = self.tasks.pause_task(user_id)
@@ -3505,6 +3680,9 @@ class TelegramBot:
         )
         self.app.add_handler(
             MessageHandler(filters.VOICE | filters.AUDIO, self._handle_voice)
+        )
+        self.app.add_handler(
+            MessageHandler(filters.Document.ALL, self._handle_document)
         )
 
         await self.app.bot.set_my_commands([
