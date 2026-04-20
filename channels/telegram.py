@@ -2396,7 +2396,12 @@ class TelegramBot:
         
         await status_msg.edit_text(preview)
 
-        # Process as text message — inject text into update and reuse _handle_message
+        # Process as text message — inject text into update and reuse _handle_message.
+        # Message is frozen in PTB v20, so unfreeze first.
+        try:
+            update.message._unfreeze()
+        except Exception:
+            pass
         update.message.text = f"[File: {file_name}]\n\n{extracted_text}"
         await self._handle_message(update, context)
 
