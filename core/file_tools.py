@@ -11,7 +11,27 @@ from core.logger import log
 
 # Allowed directories for file operations
 WORKSPACE_DIR = Path("/root/pawang/workspace")
-ALLOWED_ROOTS = [WORKSPACE_DIR, Path("/workspace"), Path("/tmp")]
+# Full-gateway mode: agents can read/inspect source code for self-diagnosis.
+# Writes to source trees still trigger approval via _is_source_path().
+ALLOWED_ROOTS = [
+    WORKSPACE_DIR,
+    Path("/workspace"),
+    Path("/tmp"),
+    Path("/root/pawang"),
+    Path("/root/openclaw/pawang"),
+]
+
+# Source-code subdirectories: writes here require approval DM to admin.
+# Workspace + /tmp remain free-write (agent scratch space).
+SOURCE_SUBDIRS = {"agents", "api", "channels", "core", "panel", "providers",
+                  "scripts", "skills", "tools", "prompts"}
+SOURCE_FILES = {"main.py", "config.yaml", ".env", "requirements.txt"}
+
+# Paths that are always blocked (even read) — secrets, host system.
+BLOCKED_PATHS = [
+    Path("/etc/shadow"), Path("/etc/gshadow"), Path("/etc/sudoers"),
+    Path("/root/.ssh"), Path("/root/.gnupg"),
+]
 
 
 def _is_allowed_path(path_str: str) -> tuple[bool, Path]:
@@ -21,12 +41,39 @@ def _is_allowed_path(path_str: str) -> tuple[bool, Path]:
     except (ValueError, OSError):
         return False, Path()
 
+    # Blocked paths override everything
+    for blocked in BLOCKED_PATHS:
+        try:
+            blocked_resolved = blocked.resolve()
+        except (ValueError, OSError):
+            continue
+        if str(resolved).startswith(str(blocked_resolved)):
+            return False, resolved
+
     for allowed in ALLOWED_ROOTS:
         allowed_resolved = allowed.resolve()
         if str(resolved).startswith(str(allowed_resolved)):
             return True, resolved
 
     return False, resolved
+
+
+def _is_source_path(resolved: Path) -> bool:
+    """True if path is inside pawang source tree (triggers approval on write)."""
+    r = str(resolved)
+    for root in ("/root/pawang", "/root/openclaw/pawang"):
+        if not r.startswith(root + "/") and r != root:
+            continue
+        rel = r[len(root) + 1:] if len(r) > len(root) else ""
+        if not rel:
+            return False
+        # workspace/tmp sub-areas remain free-write
+        if rel.startswith("workspace/") or rel.startswith("data/") or rel.startswith("projects/"):
+            return False
+        first = rel.split("/", 1)[0]
+        if first in SOURCE_SUBDIRS or first in SOURCE_FILES:
+            return True
+    return False
 
 
 def file_read(file_path: str, max_lines: int = 200, offset: int = 0) -> str:

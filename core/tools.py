@@ -619,9 +619,10 @@ AGENT_TOOLS = {
     "agent1": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather",
                "save_memory", "recall_memories", "delete_memory",
                "python_exec", "wikipedia", "translate", "calculator", "code_search",
-               "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets"],
+               "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets",
+               "run_bash", "file_read", "file_write", "file_search", "send_file", "read_pdf"],
     "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
-               "file_read", "file_write", "python_exec", "translate"],
+               "file_read", "file_write", "file_search", "code_search", "python_exec", "translate"],
     "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_write",
                "file_search", "send_file", "python_exec", "wikipedia", "calculator",
                "read_pdf", "code_search"],
@@ -631,9 +632,10 @@ AGENT_TOOLS = {
     "agent5": ["delegate_task", "check_balances", "web_search", "web_fetch", "weather",
                "save_memory", "recall_memories", "delete_memory",
                "python_exec", "wikipedia", "translate", "calculator", "code_search",
-               "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets"],
+               "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets",
+               "run_bash", "file_read", "file_write", "file_search", "send_file", "read_pdf"],
     "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
-               "file_read", "file_write", "python_exec", "translate"],
+               "file_read", "file_write", "file_search", "code_search", "python_exec", "translate"],
     "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_write",
                "file_search", "send_file", "python_exec", "wikipedia", "calculator",
                "read_pdf", "code_search"],
@@ -736,6 +738,11 @@ _DANGEROUS_PATTERNS = [
     (_re.compile(r':\(\)\s*\{'), "fork bomb"),
     (_re.compile(r'\bmkfs\b'), "format filesystem"),
     (_re.compile(r'\b(shutdown|reboot|poweroff|halt|init\s+[06])\b'), "system shutdown/reboot"),
+    (_re.compile(r'\bgit\s+push\b.*(-f\b|--force\b)'), "git force push"),
+    (_re.compile(r'\bgit\s+reset\s+--hard\b'), "git reset --hard (discards work)"),
+    (_re.compile(r'\bgit\s+clean\s+-[a-z]*f'), "git clean -f (discards untracked)"),
+    (_re.compile(r'\b(pip|npm|apt|apt-get|dpkg)\s+(uninstall|remove|purge)\b'), "package removal"),
+    (_re.compile(r'\bsystemctl\s+restart\s+(?!pawang\b)'), "restart non-pawang service"),
 ]
 
 # Sensitive file patterns
@@ -928,9 +935,31 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
         return ToolResult(name="file_read", output=result, success=not result.startswith("Error"))
 
     elif name == "file_write":
-        from core.file_tools import file_write as _file_write
+        from core.file_tools import file_write as _file_write, _is_allowed_path, _is_source_path
         path = arguments.get("file_path", "")
         content = arguments.get("content", "")
+        ok, resolved = _is_allowed_path(path)
+        if ok and _is_source_path(resolved):
+            try:
+                from core.approval import approval_manager
+                if approval_manager._notify:
+                    approved = await approval_manager.request_approval(
+                        command=f"file_write: {resolved}\n({len(content)} chars)",
+                        reason="source code modification",
+                        user_id=user_id or "", agent_id=agent_id or "",
+                    )
+                    if not approved:
+                        return ToolResult(name="file_write",
+                                          output=f"Blocked (denied/timeout): source write to {resolved}",
+                                          success=False)
+                else:
+                    return ToolResult(name="file_write",
+                                      output=f"Blocked: source writes require approval flow (admin not configured)",
+                                      success=False)
+            except Exception as e:
+                return ToolResult(name="file_write",
+                                  output=f"Approval error: {type(e).__name__}: {e}",
+                                  success=False)
         result = _file_write(path, content)
         return ToolResult(name="file_write", output=result, success=not result.startswith("Error"))
 
