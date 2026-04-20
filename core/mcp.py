@@ -22,6 +22,21 @@ from typing import Optional
 from core.logger import log
 
 
+def _estimate_tool_tokens(tools: list[dict]) -> int:
+    """Rough per-message token overhead for a list of tool definitions.
+
+    Uses ~4 chars per token heuristic on JSON-serialized tool defs.
+    Not exact, but good enough to warn when MCP adds thousands of tokens.
+    """
+    if not tools:
+        return 0
+    try:
+        serialized = json.dumps(tools, separators=(",", ":"), ensure_ascii=False)
+        return len(serialized) // 4
+    except Exception:
+        return 0
+
+
 @dataclass
 class MCPServer:
     name: str
@@ -55,9 +70,27 @@ class MCPManager:
             try:
                 await self._connect(server)
                 self._servers[name] = server
-                log.info(f"MCP server '{name}' connected — {len(server.tools)} tools")
+                overhead = _estimate_tool_tokens(server.tools)
+                log.info(
+                    f"MCP server '{name}' connected — {len(server.tools)} tools, "
+                    f"~{overhead:,} tokens/message overhead"
+                )
+                if overhead > 5000:
+                    log.warning(
+                        f"MCP '{name}' adds ~{overhead:,} tokens PER message. "
+                        f"Disconnect if unused. See 'Token Management Hacks' tip 2/9."
+                    )
             except Exception as e:
                 log.error(f"MCP server '{name}' failed to connect: {e}")
+
+    def overhead_summary(self) -> dict:
+        """Return per-server + total token overhead estimates for /status."""
+        per_server = {n: _estimate_tool_tokens(s.tools) for n, s in self._servers.items()}
+        return {
+            "servers": per_server,
+            "total_tokens": sum(per_server.values()),
+            "tool_count": sum(len(s.tools) for s in self._servers.values()),
+        }
 
     async def _connect(self, server: MCPServer):
         """Start MCP server process and discover tools."""

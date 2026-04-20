@@ -710,13 +710,39 @@ async def _run_script(script_name: str, args: list[str], timeout: int = 120) -> 
             output += "\n" + stderr.decode(errors="replace")
         return ToolResult(
             name=script_name,
-            output=output[:4000],
+            output=_smart_truncate_output(output),
             success=proc.returncode == 0,
         )
     except asyncio.TimeoutError:
         return ToolResult(name=script_name, output=f"Timeout after {timeout}s", success=False)
     except Exception as e:
         return ToolResult(name=script_name, output=str(e), success=False)
+
+
+def _smart_truncate_output(text: str, max_chars: int = 4000,
+                           head: int = 600, tail: int = 3000) -> str:
+    """Truncate long command output keeping head + tail — errors often at the end.
+
+    For short outputs (<=max_chars) returns as-is. For longer, returns first
+    `head` chars + marker + last `tail` chars so both the start and the
+    important trailing error/summary survive.
+    """
+    if not text or len(text) <= max_chars:
+        return text
+    omitted = len(text) - head - tail
+    # Count omitted lines for a more useful marker
+    try:
+        total_lines = text.count("\n") + 1
+        kept_head_lines = text[:head].count("\n")
+        kept_tail_lines = text[-tail:].count("\n")
+        omitted_lines = max(0, total_lines - kept_head_lines - kept_tail_lines)
+        marker = (
+            f"\n\n... [truncated {omitted:,} chars / ~{omitted_lines:,} lines — "
+            f"showing first {head} + last {tail}] ...\n\n"
+        )
+    except Exception:
+        marker = f"\n\n... [truncated {omitted:,} chars] ...\n\n"
+    return text[:head] + marker + text[-tail:]
 
 
 import re as _re
@@ -810,9 +836,10 @@ async def _run_bash(command: str, timeout: int = 30,
         output = stdout.decode(errors="replace")
         if stderr:
             output += "\n" + stderr.decode(errors="replace")
+        output = _smart_truncate_output(output)
         return ToolResult(
             name="bash",
-            output=output[:4000] if output else "(no output)",
+            output=output if output else "(no output)",
             success=proc.returncode == 0,
         )
     except asyncio.TimeoutError:
