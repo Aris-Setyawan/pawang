@@ -12,6 +12,22 @@ from core.logger import log
 from providers.base import Message
 
 
+def _extract_tokens(usage: dict) -> tuple[int, int]:
+    """Normalize provider-specific usage dict to (input_tokens, output_tokens).
+
+    OpenAI-compat: prompt_tokens / completion_tokens
+    Anthropic:     input_tokens  / output_tokens
+    Gemini:        promptTokenCount / candidatesTokenCount
+    """
+    if not usage:
+        return 0, 0
+    in_tok = (usage.get("prompt_tokens") or usage.get("input_tokens")
+              or usage.get("promptTokenCount") or 0)
+    out_tok = (usage.get("completion_tokens") or usage.get("output_tokens")
+               or usage.get("candidatesTokenCount") or 0)
+    return int(in_tok or 0), int(out_tok or 0)
+
+
 @dataclass
 class Session:
     """A conversation session for an agent with a specific user."""
@@ -502,6 +518,7 @@ class AgentManager:
                     summary = self._build_child_summary(to_agent_id, child_history, "interrupted")
                     return summary, i + 1, "interrupted"
 
+                iter_start = time.time()
                 response = await completion.complete(
                     config=self.config,
                     provider_name=target_agent.provider,
@@ -511,6 +528,27 @@ class AgentManager:
                     max_tokens=4096,
                     tools=tools if tools else None,
                 )
+
+                # Record usage for child agent — this is what makes agent4/agent8/etc
+                # show up in usage stats (not just the parent agent1).
+                try:
+                    in_tok, out_tok = _extract_tokens(response.usage or {})
+                    if not in_tok:
+                        in_tok = sum(len(m.content or "") for m in messages) // 4
+                    if not out_tok:
+                        out_tok = len(response.text or "") // 4
+                    get_db().record_usage(
+                        provider=target_agent.provider,
+                        model=target_agent.model,
+                        agent_id=to_agent_id,
+                        user_id=user_id,
+                        input_tokens=in_tok,
+                        output_tokens=out_tok,
+                        latency_ms=(time.time() - iter_start) * 1000,
+                        success=True,
+                    )
+                except Exception as rec_err:
+                    log.debug(f"record_usage (delegation) failed: {rec_err}")
 
                 if not response.tool_calls:
                     log.info(f"Delegation: {from_agent_id} -> {to_agent_id} OK "
