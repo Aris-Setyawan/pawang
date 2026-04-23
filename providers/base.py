@@ -68,6 +68,20 @@ class CompletionResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
 
 
+class ProviderKeyMissingError(RuntimeError):
+    """Raised when a provider is invoked without a usable API key.
+
+    Fails fast with a clear message instead of producing garbage HTTP headers
+    (which httpx rejects as LocalProtocolError on b'Bearer ').
+    """
+    def __init__(self, provider_name: str):
+        super().__init__(
+            f"API key for provider '{provider_name}' is not set or has been cleared. "
+            f"Check .env, or re-enable via admin panel / Telegram toggle."
+        )
+        self.provider_name = provider_name
+
+
 class BaseProvider(ABC):
     """Abstract base for all provider adapters."""
 
@@ -75,6 +89,11 @@ class BaseProvider(ABC):
         self.name = name
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+
+    def _require_api_key(self):
+        """Raise ProviderKeyMissingError if api_key is empty. Call at entry of complete/stream."""
+        if not self.api_key:
+            raise ProviderKeyMissingError(self.name)
 
     @abstractmethod
     async def complete(self, request: CompletionRequest) -> CompletionResponse:

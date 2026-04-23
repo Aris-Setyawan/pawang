@@ -368,7 +368,7 @@ class TelegramBot:
         self._restore_settings()
 
     def _restore_settings(self):
-        """Restore user settings from DB."""
+        """Restore user settings and disabled-provider state from DB."""
         db = get_db()
         for s in db.get_all_user_settings():
             try:
@@ -384,6 +384,15 @@ class TelegramBot:
         count = len(db.get_all_user_settings())
         if count:
             log.info(f"Restored settings for {count} users")
+
+        # Restore disabled providers — apply across restarts so admin toggle sticks
+        disabled = db.get_disabled_providers()
+        for pname, backup in disabled.items():
+            prov = self.config.get_provider(pname)
+            if prov and prov.api_key:
+                self._disabled_keys[pname] = backup or prov.api_key
+                prov.api_key = ""
+                log.warning(f"Provider '{pname}' restored as DISABLED from DB state")
 
     def _save_settings(self, user_id: int):
         """Persist current settings for a user to DB."""
@@ -661,21 +670,26 @@ class TelegramBot:
             if not prov:
                 return
 
+            db = get_db()
             if prov.api_key:
-                # Disable — backup key and clear
+                # Disable — backup key and clear (persist to DB)
                 self._disabled_keys[provider] = prov.api_key
+                db.set_provider_disabled(provider, prov.api_key)
                 prov.api_key = ""
                 from core.completion import reset_providers
                 reset_providers()
+                log.warning(f"Provider '{provider}' disabled via toggle (persisted to DB)")
                 await query.answer("Disabled!")
             else:
-                # Enable — restore backed-up key
-                backed = self._disabled_keys.get(provider, "")
+                # Enable — restore from memory or DB
+                backed = self._disabled_keys.get(provider, "") or db.set_provider_enabled(provider)
                 if backed:
                     prov.api_key = backed
-                    del self._disabled_keys[provider]
+                    db.set_provider_enabled(provider)
+                    self._disabled_keys.pop(provider, None)
                     from core.completion import reset_providers
                     reset_providers()
+                    log.info(f"Provider '{provider}' re-enabled via toggle")
                     await query.answer("Enabled!")
                 else:
                     await query.answer("No key to restore. Use Edit API Key.")

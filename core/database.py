@@ -111,6 +111,13 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_checkpoints_session
                 ON checkpoints(session_key, user_id);
+
+            CREATE TABLE IF NOT EXISTS provider_state (
+                provider_name TEXT PRIMARY KEY,
+                disabled INTEGER DEFAULT 0,
+                backup_key TEXT DEFAULT '',
+                updated_at REAL NOT NULL
+            );
         """)
         self.conn.commit()
         self._setup_fts()
@@ -419,6 +426,43 @@ class Database:
         """Get all persisted job states."""
         rows = self.conn.execute("SELECT * FROM scheduler_state").fetchall()
         return {r["job_name"]: dict(r) for r in rows}
+
+    def set_provider_disabled(self, provider_name: str, backup_key: str):
+        """Mark provider as disabled and persist the backup key for later restore."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO provider_state (provider_name, disabled, backup_key, updated_at) "
+                "VALUES (?, 1, ?, ?) "
+                "ON CONFLICT(provider_name) DO UPDATE SET "
+                "disabled = 1, backup_key = ?, updated_at = ?",
+                (provider_name, backup_key, time.time(), backup_key, time.time()),
+            )
+            self.conn.commit()
+
+    def set_provider_enabled(self, provider_name: str) -> str:
+        """Clear disabled flag; return the stored backup_key so caller can restore api_key."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT backup_key FROM provider_state WHERE provider_name = ?",
+                (provider_name,),
+            ).fetchone()
+            backup = row["backup_key"] if row else ""
+            self.conn.execute(
+                "INSERT INTO provider_state (provider_name, disabled, backup_key, updated_at) "
+                "VALUES (?, 0, '', ?) "
+                "ON CONFLICT(provider_name) DO UPDATE SET "
+                "disabled = 0, backup_key = '', updated_at = ?",
+                (provider_name, time.time(), time.time()),
+            )
+            self.conn.commit()
+            return backup
+
+    def get_disabled_providers(self) -> dict[str, str]:
+        """Return {provider_name: backup_key} for all providers currently marked disabled."""
+        rows = self.conn.execute(
+            "SELECT provider_name, backup_key FROM provider_state WHERE disabled = 1"
+        ).fetchall()
+        return {r["provider_name"]: r["backup_key"] for r in rows}
 
     def close(self):
         self.conn.close()

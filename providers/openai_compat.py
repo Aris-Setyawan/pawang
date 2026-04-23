@@ -111,6 +111,7 @@ class OpenAIProvider(BaseProvider):
         return body
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        self._require_api_key()
         request.stream = False
         body = self._build_body(request)
 
@@ -169,6 +170,7 @@ class OpenAIProvider(BaseProvider):
         )
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
+        self._require_api_key()
         request.stream = True
         body = self._build_body(request)
 

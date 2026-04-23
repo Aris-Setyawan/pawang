@@ -81,6 +81,7 @@ class GeminiProvider(BaseProvider):
         return f"{self.base_url}/models/{model}:{method}?key={self.api_key}"
 
     async def complete(self, request: CompletionRequest) -> CompletionResponse:
+        self._require_api_key()
         body = self._build_body(request)
 
         async with httpx.AsyncClient(timeout=120) as client:
@@ -113,6 +114,7 @@ class GeminiProvider(BaseProvider):
         )
 
     async def stream(self, request: CompletionRequest) -> AsyncIterator[CompletionChunk]:
+        self._require_api_key()
         body = self._build_body(request)
         url = self._url(request.model, stream=True) + "&alt=sse"
 
