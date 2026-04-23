@@ -118,6 +118,19 @@ class Database:
                 backup_key TEXT DEFAULT '',
                 updated_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS github_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT DEFAULT '',
+                params TEXT DEFAULT '',
+                success INTEGER DEFAULT 1,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_gh_audit_ts
+                ON github_audit(created_at DESC);
         """)
         self.conn.commit()
         self._setup_fts()
@@ -463,6 +476,27 @@ class Database:
             "SELECT provider_name, backup_key FROM provider_state WHERE disabled = 1"
         ).fetchall()
         return {r["provider_name"]: r["backup_key"] for r in rows}
+
+    def record_github_audit(self, agent_id: str, user_id: str, action: str,
+                            target: str = "", params: str = "",
+                            success: bool = True):
+        """Append one entry to the GitHub tool audit log."""
+        with self._lock:
+            self.conn.execute(
+                "INSERT INTO github_audit (agent_id, user_id, action, target, "
+                "params, success, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (agent_id, user_id, action, target, params,
+                 int(success), time.time()),
+            )
+            self.conn.commit()
+
+    def get_github_audit(self, limit: int = 50) -> list[dict]:
+        """Return latest audit rows, newest first."""
+        rows = self.conn.execute(
+            "SELECT * FROM github_audit ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self):
         self.conn.close()

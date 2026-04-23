@@ -609,6 +609,170 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    # --- GitHub Tier 1 read-only tools ---
+    {
+        "type": "function",
+        "function": {
+            "name": "github_repo_list",
+            "description": "List GitHub repos accessible to the authenticated user. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max repos (1-100)", "default": 20},
+                    "visibility": {"type": "string", "enum": ["", "public", "private"], "default": ""},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_repo_view",
+            "description": "View a GitHub repo (README + metadata). Format repo as 'owner/name'. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "owner/name"},
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_issue_list",
+            "description": "List issues in a GitHub repo. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "owner/name"},
+                    "state": {"type": "string", "enum": ["open", "closed", "all"], "default": "open"},
+                    "limit": {"type": "integer", "default": 20},
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_issue_view",
+            "description": "View a GitHub issue with comments. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string"},
+                    "number": {"type": "integer"},
+                },
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_pr_list",
+            "description": "List pull requests in a GitHub repo. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string"},
+                    "state": {"type": "string", "enum": ["open", "closed", "merged", "all"], "default": "open"},
+                    "limit": {"type": "integer", "default": 20},
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_pr_view",
+            "description": "View a PR with description, checks, reviews, and comments. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string"},
+                    "number": {"type": "integer"},
+                },
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_pr_diff",
+            "description": "Get the unified diff of a PR (truncated). Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string"},
+                    "number": {"type": "integer"},
+                },
+                "required": ["repo", "number"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_read_file",
+            "description": "Read a file from any accessible GitHub repo at a given ref. Read-only.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "owner/name"},
+                    "path": {"type": "string", "description": "path/to/file.py"},
+                    "ref": {"type": "string", "description": "branch, tag, or commit SHA (default: default branch)", "default": ""},
+                },
+                "required": ["repo", "path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_search_code",
+            "description": "Search code across repos accessible to the user. Query syntax: GitHub search.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "default": 20},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_api_get",
+            "description": "Escape hatch: raw GET to any GitHub REST endpoint. Method is locked to GET.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "endpoint": {"type": "string", "description": "e.g. repos/owner/repo/commits"},
+                },
+                "required": ["endpoint"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_audit_log",
+            "description": "Show recent GitHub tool calls (audit log). Useful for review.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "default": 20},
+                },
+            },
+        },
+    },
 ]
 
 
@@ -620,7 +784,10 @@ AGENT_TOOLS = {
                "save_memory", "recall_memories", "delete_memory",
                "python_exec", "wikipedia", "translate", "calculator", "code_search",
                "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets",
-               "run_bash", "file_read", "file_write", "file_search", "send_file", "read_pdf"],
+               "run_bash", "file_read", "file_write", "file_search", "send_file", "read_pdf",
+               "github_repo_list", "github_repo_view", "github_issue_list", "github_issue_view",
+               "github_pr_list", "github_pr_view", "github_pr_diff", "github_read_file",
+               "github_search_code", "github_api_get", "github_audit_log"],
     "agent2": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
                "file_read", "file_write", "file_search", "code_search", "python_exec", "translate"],
     "agent3": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_write",
@@ -633,7 +800,10 @@ AGENT_TOOLS = {
                "save_memory", "recall_memories", "delete_memory",
                "python_exec", "wikipedia", "translate", "calculator", "code_search",
                "skill_hub", "gog_gmail", "gog_calendar", "gog_sheets",
-               "run_bash", "file_read", "file_write", "file_search", "send_file", "read_pdf"],
+               "run_bash", "file_read", "file_write", "file_search", "send_file", "read_pdf",
+               "github_repo_list", "github_repo_view", "github_issue_list", "github_issue_view",
+               "github_pr_list", "github_pr_view", "github_pr_diff", "github_read_file",
+               "github_search_code", "github_api_get", "github_audit_log"],
     "agent6": ["generate_image", "generate_video", "generate_audio", "send_file", "run_bash",
                "file_read", "file_write", "file_search", "code_search", "python_exec", "translate"],
     "agent7": ["web_search", "web_fetch", "weather", "run_bash", "file_read", "file_write",
@@ -1048,6 +1218,51 @@ async def execute_tool(name: str, arguments: dict, chat_id: str = "",
 
     elif name == "gog_sheets":
         return await _gog_sheets(arguments)
+
+    elif name.startswith("github_"):
+        from core import github_tool as gh
+        dispatch = {
+            "github_repo_list": lambda a: gh.repo_list(
+                limit=a.get("limit", 20), visibility=a.get("visibility", ""),
+                agent_id=agent_id, user_id=user_id),
+            "github_repo_view": lambda a: gh.repo_view(
+                repo=a.get("repo", ""), agent_id=agent_id, user_id=user_id),
+            "github_issue_list": lambda a: gh.issue_list(
+                repo=a.get("repo", ""), state=a.get("state", "open"),
+                limit=a.get("limit", 20), agent_id=agent_id, user_id=user_id),
+            "github_issue_view": lambda a: gh.issue_view(
+                repo=a.get("repo", ""), number=int(a.get("number", 0)),
+                agent_id=agent_id, user_id=user_id),
+            "github_pr_list": lambda a: gh.pr_list(
+                repo=a.get("repo", ""), state=a.get("state", "open"),
+                limit=a.get("limit", 20), agent_id=agent_id, user_id=user_id),
+            "github_pr_view": lambda a: gh.pr_view(
+                repo=a.get("repo", ""), number=int(a.get("number", 0)),
+                agent_id=agent_id, user_id=user_id),
+            "github_pr_diff": lambda a: gh.pr_diff(
+                repo=a.get("repo", ""), number=int(a.get("number", 0)),
+                agent_id=agent_id, user_id=user_id),
+            "github_read_file": lambda a: gh.read_file(
+                repo=a.get("repo", ""), path=a.get("path", ""),
+                ref=a.get("ref", ""), agent_id=agent_id, user_id=user_id),
+            "github_search_code": lambda a: gh.search_code(
+                query=a.get("query", ""), limit=a.get("limit", 20),
+                agent_id=agent_id, user_id=user_id),
+            "github_api_get": lambda a: gh.api_get(
+                endpoint=a.get("endpoint", ""),
+                agent_id=agent_id, user_id=user_id),
+            "github_audit_log": lambda a: gh.audit_log(
+                limit=a.get("limit", 20),
+                agent_id=agent_id, user_id=user_id),
+        }
+        handler = dispatch.get(name)
+        if not handler:
+            return ToolResult(name=name, output=f"Unknown GitHub tool: {name}", success=False)
+        try:
+            output, ok = await handler(arguments)
+            return ToolResult(name=name, output=output, success=ok)
+        except Exception as e:
+            return ToolResult(name=name, output=f"github tool error: {type(e).__name__}: {e}", success=False)
 
     elif name.startswith("mcp_"):
         # MCP tool call — route to MCP manager
